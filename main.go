@@ -1,6 +1,7 @@
 package main
 
 import (
+	"expensetracker/routes"
 	"log"
 	"os"
 
@@ -35,6 +36,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+	routes.SetupRoutes(r, DB)
 
 	log.Println("🚀 Server đang khởi chạy tại cổng:", port)
 	if err := r.Run(":" + port); err != nil {
