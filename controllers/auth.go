@@ -26,6 +26,7 @@ import (
 	"expensetracker/models"
 	"expensetracker/utils"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -63,7 +64,10 @@ func Register(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		username := strings.Split(input.Email, "@")[0]
+
 		newUser := models.User{
+			Username: username,
 			Email:    input.Email,
 			Password: hashedPassword,
 		}
