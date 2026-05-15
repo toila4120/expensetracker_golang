@@ -11,7 +11,7 @@ import (
 
 var DB *gorm.DB
 
-func ConnectDB() {
+func main() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("⚠️ Không tìm thấy file .env (Có thể bạn đang chạy trên Server Production)")
