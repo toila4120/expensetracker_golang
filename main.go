@@ -24,7 +24,10 @@ func main() {
 		log.Fatal("❌ Lỗi: DATABASE_URL chưa được thiết lập!")
 	}
 
-	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	database, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  dsn,
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{
 		PrepareStmt: false,
 	})
 	if err != nil {
