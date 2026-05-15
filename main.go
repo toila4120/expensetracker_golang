@@ -1,6 +1,7 @@
 package main
 
 import (
+	"expensetracker/models"
 	"expensetracker/routes"
 	"log"
 	"os"
@@ -35,6 +36,12 @@ func main() {
 	}
 	log.Println("✅ Kết nối Neon PostgreSQL thành công thông qua biến môi trường!")
 	DB = database
+
+	// Tự động Migrate các Model để đồng bộ schema với Database (tạo bảng, thêm cột còn thiếu)
+	err = database.AutoMigrate(&models.User{}, &models.Transaction{})
+	if err != nil {
+		log.Println("⚠️ Lỗi khi AutoMigrate:", err)
+	}
 
 	r := gin.Default()
 	port := os.Getenv("PORT")
