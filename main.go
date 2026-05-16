@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
@@ -44,6 +45,10 @@ func main() {
 	}
 
 	r := gin.Default()
+	
+	// Cấu hình CORS
+	r.Use(cors.Default())
+	
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
