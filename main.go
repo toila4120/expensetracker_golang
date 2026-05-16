@@ -47,7 +47,10 @@ func main() {
 	r := gin.Default()
 	
 	// Cấu hình CORS
-	r.Use(cors.Default())
+	config := cors.DefaultConfig()
+	config.AllowAllOrigins = true
+	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
+	r.Use(cors.New(config))
 	
 	port := os.Getenv("PORT")
 	if port == "" {
