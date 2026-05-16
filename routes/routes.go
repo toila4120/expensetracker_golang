@@ -50,5 +50,17 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		apiGroup.POST("/transactions", controllers.CreateTransaction(db))
 		apiGroup.PUT("/transactions/:id", controllers.UpdateTransaction(db))
 		apiGroup.DELETE("/transactions/:id", controllers.DeleteTransaction(db))
+
+		// Dashboard
+		apiGroup.GET("/dashboard", controllers.GetDashboard(db))
+
+		// Profile
+		apiGroup.GET("/profile", controllers.GetProfile(db))
+		apiGroup.PUT("/profile", controllers.UpdateProfile(db))
+
+		// Budget
+		apiGroup.GET("/budgets", controllers.GetBudgets(db))
+		apiGroup.POST("/budgets", controllers.CreateBudget(db))
+		apiGroup.DELETE("/budgets/:id", controllers.DeleteBudget(db))
 	}
 }
