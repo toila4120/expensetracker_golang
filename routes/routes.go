@@ -62,5 +62,18 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		apiGroup.GET("/budgets", controllers.GetBudgets(db))
 		apiGroup.POST("/budgets", controllers.CreateBudget(db))
 		apiGroup.DELETE("/budgets/:id", controllers.DeleteBudget(db))
+
+		// Search & Analytics
+		apiGroup.GET("/transactions/search", controllers.SearchTransactions(db))
+		apiGroup.GET("/analytics/categories", controllers.GetCategoryStats(db))
+
+		// Security
+		apiGroup.PUT("/change-password", controllers.ChangePassword(db))
+
+		// Recurring Transactions
+		apiGroup.GET("/recurring", controllers.GetRecurrings(db))
+		apiGroup.POST("/recurring", controllers.CreateRecurring(db))
+		apiGroup.PUT("/recurring/:id/toggle", controllers.ToggleRecurring(db))
+		apiGroup.DELETE("/recurring/:id", controllers.DeleteRecurring(db))
 	}
 }
