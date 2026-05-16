@@ -18,11 +18,11 @@ import (
 )
 
 type Transaction struct {
-	ID        int            `gorm:"primaryKey;autoIncrement"`
-	UserID    uint           `gorm:"not null;ForeignKey:UserID"`
-	Type      string         `gorm:"not null"`
-	Amount    int            `gorm:"not null"`
-	Category  string         `gorm:"not null"`
+	ID        int    `gorm:"primaryKey;autoIncrement"`
+	UserID    uint   `gorm:"not null;ForeignKey:UserID"`
+	Type      string `gorm:"not null"`
+	Amount    int    `gorm:"not null"`
+	Category  string `gorm:"not null"`
 	Note      string
 	Date      time.Time      `gorm:"not null"`
 	CreatedAt time.Time      `gorm:"autoCreateTime"`
