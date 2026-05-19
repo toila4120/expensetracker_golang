@@ -37,6 +37,10 @@ type AuthInput struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type RefreshTokenInput struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
 func Register(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var input AuthInput
@@ -123,6 +127,56 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 		ctx.JSON(http.StatusOK, gin.H{
 			"message": "Đăng nhập thành công",
 			"token":   token,
+		})
+	}
+}
+
+// Hàm RefreshToken
+func RefreshToken(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input RefreshTokenInput
+
+		// 1. Lấy refresh token từ request body
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Vui lòng cung cấp refresh token",
+				"details": err.Error(),
+			})
+			return
+		}
+
+		// 2. Xác thực Refresh Token và lấy ra UserID
+		// Giả sử bạn có hàm utils.ValidateToken để giải mã và kiểm tra token
+		userID, err := utils.ValidateToken(input.RefreshToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Refresh token không hợp lệ hoặc đã hết hạn",
+			})
+			return
+		}
+
+		// 3. (Tùy chọn nhưng khuyến nghị) Kiểm tra xem user có còn tồn tại trong DB không
+		var user models.User
+		if err := db.First(&user, userID).Error; err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Người dùng không tồn tại hoặc đã bị xóa",
+			})
+			return
+		}
+
+		// 4. Tạo Access Token mới
+		newToken, err := utils.GenerateToken(user.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Lỗi hệ thống khi tạo token mới",
+			})
+			return
+		}
+
+		// 5. Trả về token mới cho client
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Làm mới token thành công",
+			"token":   newToken,
 		})
 	}
 }
