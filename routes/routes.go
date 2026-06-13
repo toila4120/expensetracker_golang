@@ -31,6 +31,12 @@ import (
 
 // SetupRoutes cấu hình toàn bộ các đường dẫn cho ứng dụng
 func SetupRoutes(r *gin.Engine, db *gorm.DB) {
+	// Health check endpoint cho Render deploy
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status": "healthy",
+		})
+	})
 
 	authGroup := r.Group("/auth")
 	{
