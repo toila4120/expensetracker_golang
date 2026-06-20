@@ -24,7 +24,6 @@ package routes
 import (
 	"expensetracker/controllers"
 	"expensetracker/middleware"
-	"expensetracker/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -36,25 +35,6 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"status": "healthy",
-		})
-	})
-
-	// Endpoint tạm thời để reset dữ liệu và tạo lại các bảng theo cách 2 (sẽ xóa sau khi hoàn thành)
-	r.GET("/reset-db-dangerous", func(c *gin.Context) {
-		err := db.Migrator().DropTable(&models.User{}, &models.Transaction{}, &models.Budget{}, &models.RecurringTransaction{})
-		if err != nil {
-			c.JSON(500, gin.H{"error": "Không thể xóa các bảng: " + err.Error()})
-			return
-		}
-
-		err = db.AutoMigrate(&models.User{}, &models.Transaction{}, &models.Budget{}, &models.RecurringTransaction{})
-		if err != nil {
-			c.JSON(500, gin.H{"error": "Không thể tạo lại các bảng: " + err.Error()})
-			return
-		}
-
-		c.JSON(200, gin.H{
-			"message": "Đã xóa toàn bộ dữ liệu và cấu trúc lại bảng thành công!",
 		})
 	})
 
