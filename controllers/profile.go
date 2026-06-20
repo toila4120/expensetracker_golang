@@ -52,18 +52,22 @@ func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		user.Username = input.Username
-		if err := db.Save(&user).Error; err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể cập nhật thông tin"})
+		// Chỉ cập nhật trường username thay vì dùng db.Save để tránh lỗi timezone/định dạng trên PostgreSQL
+		if err := db.Model(&user).Update("username", input.Username).Error; err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "Không thể cập nhật thông tin",
+				"details": err.Error(),
+			})
 			return
 		}
 
 		ctx.JSON(http.StatusOK, gin.H{
 			"message": "Cập nhật thành công",
 			"data": gin.H{
-				"id":       user.ID,
-				"username": user.Username,
-				"email":    user.Email,
+				"id":         user.ID,
+				"username":   user.Username,
+				"email":      user.Email,
+				"created_at": user.CreatedAt,
 			},
 		})
 	}
