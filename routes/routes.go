@@ -43,6 +43,7 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		// Cú pháp: authGroup.POST("đường_dẫn", hàm_xử_lý)
 		authGroup.POST("/register", controllers.Register(db))
 		authGroup.POST("/login", controllers.Login(db))
+		authGroup.POST("/refresh", controllers.RefreshToken(db))
 	}
 
 	apiGroup := r.Group("/api")

@@ -34,10 +34,28 @@ type CustomClaims struct {
 }
 
 func GenerateToken(userID uint) (string, error) {
+	return GenerateAccessToken(userID)
+}
+
+func GenerateAccessToken(userID uint) (string, error) {
 	claims := CustomClaims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	return token.SignedString(getSecretKey())
+}
+
+func GenerateRefreshToken(userID uint) (string, error) {
+	claims := CustomClaims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}

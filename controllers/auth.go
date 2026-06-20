@@ -116,17 +116,26 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		token, err := utils.GenerateToken(existingUser.ID)
+		accessToken, err := utils.GenerateAccessToken(existingUser.ID)
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Lỗi hệ thống khi tạo token",
+				"error": "Lỗi hệ thống khi tạo Access Token",
+			})
+			return
+		}
+
+		refreshToken, err := utils.GenerateRefreshToken(existingUser.ID)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Lỗi hệ thống khi tạo Refresh Token",
 			})
 			return
 		}
 
 		ctx.JSON(http.StatusOK, gin.H{
-			"message": "Đăng nhập thành công",
-			"token":   token,
+			"message":       "Đăng nhập thành công",
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
 		})
 	}
 }
@@ -165,18 +174,18 @@ func RefreshToken(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// 4. Tạo Access Token mới
-		newToken, err := utils.GenerateToken(user.ID)
+		newToken, err := utils.GenerateAccessToken(user.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Lỗi hệ thống khi tạo token mới",
+				"error": "Lỗi hệ thống khi tạo Access Token mới",
 			})
 			return
 		}
 
 		// 5. Trả về token mới cho client
 		c.JSON(http.StatusOK, gin.H{
-			"message": "Làm mới token thành công",
-			"token":   newToken,
+			"message":      "Làm mới token thành công",
+			"access_token": newToken,
 		})
 	}
 }
