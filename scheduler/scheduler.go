@@ -23,9 +23,18 @@ func New(db *gorm.DB) *Scheduler {
 }
 
 func (s *Scheduler) Start() {
+	// Chạy ngay khi server start để xử lý các giao dịch bị bỏ lỡ
+	s.RunOnce()
+
 	s.cron.AddFunc("5 0 * * *", s.processRecurringTransactions)
 	s.cron.Start()
 	log.Println("⏰ Scheduler started - Recurring transactions will be processed daily at 00:05")
+}
+
+// RunOnce chạy quét recurring transactions cho ngày hôm nay (dùng khi server vừa start)
+func (s *Scheduler) RunOnce() {
+	log.Println("⏰ Scheduler: Kiểm tra giao dịch định kỳ khi server start...")
+	s.processRecurringTransactions()
 }
 
 func (s *Scheduler) Stop() {
