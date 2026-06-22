@@ -23,18 +23,12 @@ func New(db *gorm.DB) *Scheduler {
 }
 
 func (s *Scheduler) Start() {
-	// Chạy ngay khi server start để xử lý các giao dịch bị bỏ lỡ
-	s.RunOnce()
+	// Bắt补齐 các ngày đã bỏ lỡ khi server vừa start
+	s.catchUp()
 
 	s.cron.AddFunc("5 0 * * *", s.processRecurringTransactions)
 	s.cron.Start()
 	log.Println("⏰ Scheduler started - Recurring transactions will be processed daily at 00:05")
-}
-
-// RunOnce chạy quét recurring transactions cho ngày hôm nay (dùng khi server vừa start)
-func (s *Scheduler) RunOnce() {
-	log.Println("⏰ Scheduler: Kiểm tra giao dịch định kỳ khi server start...")
-	s.processRecurringTransactions()
 }
 
 func (s *Scheduler) Stop() {
@@ -43,11 +37,68 @@ func (s *Scheduler) Stop() {
 	log.Println("⏰ Scheduler stopped")
 }
 
+// catchUp kiểm tra và xử lý các ngày bị bỏ lỡ từ lần chạy cuối cùng
+func (s *Scheduler) catchUp() {
+	lastRun := s.getLastRun()
+	today := time.Now().Truncate(24 * time.Hour)
+
+	if lastRun.IsZero() {
+		// Lần đầu chạy, chỉ xử lý hôm nay
+		log.Println("⏰ Scheduler: Chạy lần đầu, xử lý giao dịch hôm nay")
+		s.processRecurringTransactionsForDate(today)
+		s.updateLastRun(today)
+		return
+	}
+
+	// Lấy ngày cuối cùng đã chạy (bỏ phần giờ)
+	lastRunDay := lastRun.Truncate(24 * time.Hour)
+
+	if !today.After(lastRunDay) {
+		log.Println("⏰ Scheduler: Đã xử lý hôm nay rồi, bỏ qua")
+		return
+	}
+
+	// Iterates từ ngày hôm sau lastRun đến hôm nay
+	missedDays := 0
+	for d := lastRunDay.AddDate(0, 0, 1); !d.After(today); d = d.AddDate(0, 0, 1) {
+		log.Printf("⏰ Scheduler: Xử lý bù cho ngày %s\n", d.Format("02/01/2006"))
+		s.processRecurringTransactionsForDate(d)
+		missedDays++
+	}
+
+	s.updateLastRun(today)
+	log.Printf("⏰ Scheduler: Đã xử lý bù %d ngày bị bỏ lỡ\n", missedDays)
+}
+
+// getLastRun lấy thời gian chạy cuối cùng từ DB
+func (s *Scheduler) getLastRun() time.Time {
+	var logEntry models.SchedulerLog
+	// Lấy bản ghi mới nhất
+	result := s.db.Order("id DESC").First(&logEntry)
+	if result.Error != nil {
+		return time.Time{} // Zero time nếu chưa có bản ghi nào
+	}
+	return logEntry.LastRunAt
+}
+
+// updateLastRun cập nhật thời gian chạy vào DB
+func (s *Scheduler) updateLastRun(t time.Time) {
+	logEntry := models.SchedulerLog{LastRunAt: t}
+	s.db.Create(&logEntry)
+}
+
+// processRecurringTransactions được gọi bởi cron job (xử lý hôm nay)
 func (s *Scheduler) processRecurringTransactions() {
-	now := time.Now()
-	today := now.Day()
-	currentMonth := int(now.Month())
-	currentYear := now.Year()
+	today := time.Now().Truncate(24 * time.Hour)
+	s.processRecurringTransactionsForDate(today)
+	s.updateLastRun(today)
+}
+
+// processRecurringTransactionsForDate xử lý recurring transactions cho một ngày cụ thể
+func (s *Scheduler) processRecurringTransactionsForDate(targetDate time.Time) {
+	day := targetDate.Day()
+	month := int(targetDate.Month())
+	year := targetDate.Year()
 
 	// Lấy tất cả giao dịch định kỳ đang active
 	var recurrings []models.RecurringTransaction
@@ -62,24 +113,23 @@ func (s *Scheduler) processRecurringTransactions() {
 	}
 
 	log.Printf("⏰ Scheduler: Tìm thấy %d giao dịch định kỳ active, kiểm tra ngày %d/%d/%d\n",
-		len(recurrings), today, currentMonth, currentYear)
+		len(recurrings), day, month, year)
 
 	createdCount := 0
 	for _, recurring := range recurrings {
-		// Xử lý trường hợp DayOfMonth lớn hơn số ngày trong tháng
-		// Ví dụ: DayOfMonth=31 nhưng tháng 2 chỉ có 28 ngày -> tạo ngày cuối tháng
+		// Xử lý DayOfMonth > số ngày trong tháng (VD: DayOfMonth=31 ở tháng 2 → ngày 28/29)
 		targetDay := recurring.DayOfMonth
-		lastDayOfMonth := time.Date(currentYear, time.Month(currentMonth+1), 0, 0, 0, 0, 0, time.Local).Day()
+		lastDayOfMonth := time.Date(year, time.Month(month+1), 0, 0, 0, 0, 0, time.Local).Day()
 		if targetDay > lastDayOfMonth {
 			targetDay = lastDayOfMonth
 		}
 
-		if today != targetDay {
+		if day != targetDay {
 			continue
 		}
 
 		// Kiểm tra đã tạo transaction cho ngày này chưa (tránh duplicate)
-		startOfDay := time.Date(currentYear, time.Month(currentMonth), today, 0, 0, 0, 0, time.Local)
+		startOfDay := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
 		endOfDay := startOfDay.AddDate(0, 0, 1)
 
 		var existing models.Transaction
@@ -90,9 +140,8 @@ func (s *Scheduler) processRecurringTransactions() {
 		).First(&existing)
 
 		if result.Error == nil {
-			// Đã tồn tại transaction cho ngày này, bỏ qua
 			log.Printf("⏰ Scheduler: Bỏ qua recurring #%d (user %d) - đã có transaction cho ngày %d/%d/%d\n",
-				recurring.ID, recurring.UserID, today, currentMonth, currentYear)
+				recurring.ID, recurring.UserID, day, month, year)
 			continue
 		}
 
@@ -103,7 +152,7 @@ func (s *Scheduler) processRecurringTransactions() {
 			Amount:   recurring.Amount,
 			Category: recurring.Category,
 			Note:     recurring.Note,
-			Date:     time.Date(currentYear, time.Month(currentMonth), today, 0, 0, 0, 0, time.Local),
+			Date:     time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local),
 		}
 
 		if err := s.db.Create(&transaction).Error; err != nil {
@@ -117,5 +166,8 @@ func (s *Scheduler) processRecurringTransactions() {
 		createdCount++
 	}
 
-	log.Printf("⏰ Scheduler: Hoàn thành - Đã tạo %d/%d giao dịch mới\n", createdCount, len(recurrings))
+	if createdCount > 0 {
+		log.Printf("⏰ Scheduler: Hoàn thành ngày %d/%d/%d - Đã tạo %d/%d giao dịch mới\n",
+			day, month, year, createdCount, len(recurrings))
+	}
 }
