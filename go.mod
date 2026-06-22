@@ -11,7 +11,10 @@ require (
 
 require github.com/joho/godotenv v1.5.1
 
-require github.com/gin-contrib/cors v1.7.7 // indirect
+require (
+	github.com/gin-contrib/cors v1.7.7 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

@@ -3,8 +3,11 @@ package main
 import (
 	"expensetracker/models"
 	"expensetracker/routes"
+	"expensetracker/scheduler"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -58,8 +61,22 @@ func main() {
 	}
 	routes.SetupRoutes(r, DB)
 
-	log.Println("🚀 Server đang khởi chạy tại cổng:", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatal("❌ Lỗi khi khởi chạy Server: ", err)
-	}
+	// Khởi chạy scheduler cho recurring transactions
+	sched := scheduler.New(DB)
+	sched.Start()
+	defer sched.Stop()
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		log.Println("🚀 Server đang khởi chạy tại cổng:", port)
+		if err := r.Run(":" + port); err != nil {
+			log.Fatal("❌ Lỗi khi khởi chạy Server: ", err)
+		}
+	}()
+
+	<-quit
+	log.Println("🛑 Đang tắt server...")
 }
