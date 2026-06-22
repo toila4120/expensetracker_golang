@@ -82,5 +82,11 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		apiGroup.POST("/recurring", controllers.CreateRecurring(db))
 		apiGroup.PUT("/recurring/:id/toggle", controllers.ToggleRecurring(db))
 		apiGroup.DELETE("/recurring/:id", controllers.DeleteRecurring(db))
+
+		// Wallets
+		apiGroup.GET("/wallets", controllers.GetWallets(db))
+		apiGroup.POST("/wallets", controllers.CreateWallet(db))
+		apiGroup.GET("/wallets/:id", controllers.GetWalletDetails(db))
+		apiGroup.POST("/wallets/:id/invite", controllers.InviteMember(db))
 	}
 }

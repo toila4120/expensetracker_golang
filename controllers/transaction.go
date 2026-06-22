@@ -17,6 +17,7 @@ type CreateTransactionInput struct {
 	Type        string    `json:"type" binding:"required,oneof=income expense"`
 	Description string    `json:"description"`
 	Date        time.Time `json:"date"`
+	WalletID    *uint     `json:"wallet_id"`
 }
 
 func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
@@ -33,6 +34,21 @@ func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
 
 		userID := c.MustGet("currentUserID").(uint)
 
+		var wallet models.Wallet
+		if input.WalletID != nil {
+			// Xác thực xem người dùng có là thành viên của ví không
+			var count int64
+			db.Table("wallet_members").Where("wallet_id = ? AND user_id = ?", *input.WalletID, userID).Count(&count)
+			if count == 0 {
+				c.JSON(http.StatusForbidden, gin.H{"error": "Bạn không phải thành viên của ví này"})
+				return
+			}
+			if err := db.First(&wallet, *input.WalletID).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Ví không tồn tại"})
+				return
+			}
+		}
+
 		transactionDate := input.Date
 		if transactionDate.IsZero() {
 			transactionDate = time.Now()
@@ -45,14 +61,33 @@ func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
 			Note:     input.Description,
 			Date:     transactionDate,
 			UserID:   userID,
+			WalletID: input.WalletID,
 		}
 
-		if err := db.Create(&newTransaction).Error; err != nil {
+		tx := db.Begin()
+		if err := tx.Create(&newTransaction).Error; err != nil {
+			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Không thể tạo giao dịch, vui lòng thử lại sau",
 			})
 			return
 		}
+
+		if input.WalletID != nil {
+			if newTransaction.Type == "income" {
+				wallet.Balance += newTransaction.Amount
+			} else {
+				wallet.Balance -= newTransaction.Amount
+			}
+			if err := tx.Save(&wallet).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Không thể cập nhật số dư ví",
+				})
+				return
+			}
+		}
+		tx.Commit()
 
 		c.JSON(http.StatusCreated, gin.H{
 			"message": "Đã thêm giao dịch thành công",
@@ -64,15 +99,34 @@ func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
 func GetAllTransaction(db *gorm.DB) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		userID := ctx.MustGet("currentUserID").(uint)
-		query := db.Model(&models.Transaction{}).Where("user_id = ?", userID)
+
+		// Người dùng có thể thấy giao dịch của mình HOẶC giao dịch thuộc ví chung mà họ làm thành viên
+		query := db.Model(&models.Transaction{}).
+			Where("transactions.user_id = ? OR transactions.wallet_id IN (SELECT wallet_id FROM wallet_members WHERE user_id = ?)", userID, userID)
+
+		walletIDStr := ctx.Query("wallet_id")
+		if walletIDStr != "" {
+			walletID, err := strconv.ParseUint(walletIDStr, 10, 32)
+			if err == nil {
+				// Xác minh xem có phải thành viên của ví đó không
+				var count int64
+				db.Table("wallet_members").Where("wallet_id = ? AND user_id = ?", walletID, userID).Count(&count)
+				if count == 0 {
+					ctx.JSON(http.StatusForbidden, gin.H{"error": "Bạn không phải thành viên của ví này"})
+					return
+				}
+				query = query.Where("transactions.wallet_id = ?", walletID)
+			}
+		}
+
 		category := ctx.Query("category")
 		if category != "" {
-			query = query.Where("category = ?", category)
+			query = query.Where("transactions.category = ?", category)
 		}
 		startDate := ctx.Query("start_date")
 		endDate := ctx.Query("end_date")
 		if startDate != "" && endDate != "" {
-			query = query.Where("date BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
+			query = query.Where("transactions.date BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
 		}
 		page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 		limit, _ := strconv.Atoi(ctx.DefaultQuery("limit", "50"))
@@ -97,6 +151,7 @@ type UpdateTransactionInput struct {
 	Type     string    `json:"type" binding:"required,oneof=income expense"`
 	Note     string    `json:"description"`
 	Date     time.Time `json:"date"`
+	WalletID *uint     `json:"wallet_id"`
 }
 
 func UpdateTransaction(db *gorm.DB) gin.HandlerFunc {
@@ -118,21 +173,66 @@ func UpdateTransaction(db *gorm.DB) gin.HandlerFunc {
 			})
 			return
 		}
+
+		tx := db.Begin()
+
+		// Hoàn tác ảnh hưởng ví cũ
+		if transaction.WalletID != nil {
+			var wallet models.Wallet
+			if err := tx.First(&wallet, *transaction.WalletID).Error; err == nil {
+				if transaction.Type == "income" {
+					wallet.Balance -= transaction.Amount
+				} else {
+					wallet.Balance += transaction.Amount
+				}
+				tx.Save(&wallet)
+			}
+		}
+
+		// Gán giá trị mới
 		transaction.Amount = input.Amount
 		transaction.Category = input.Category
 		transaction.Type = input.Type
 		transaction.Note = input.Note
+		transaction.WalletID = input.WalletID
 		if !input.Date.IsZero() {
 			transaction.Date = input.Date
 		}
-		// UpdatedAt sẽ tự động cập nhật bởi GORM autoUpdateTime
 
-		if err := db.Save(&transaction).Error; err != nil {
+		// Áp dụng ảnh hưởng ví mới
+		if transaction.WalletID != nil {
+			var count int64
+			tx.Table("wallet_members").Where("wallet_id = ? AND user_id = ?", *transaction.WalletID, userID).Count(&count)
+			if count == 0 {
+				tx.Rollback()
+				ctx.JSON(http.StatusForbidden, gin.H{"error": "Bạn không phải thành viên của ví này"})
+				return
+			}
+
+			var wallet models.Wallet
+			if err := tx.First(&wallet, *transaction.WalletID).Error; err != nil {
+				tx.Rollback()
+				ctx.JSON(http.StatusNotFound, gin.H{"error": "Ví không tồn tại"})
+				return
+			}
+			if transaction.Type == "income" {
+				wallet.Balance += transaction.Amount
+			} else {
+				wallet.Balance -= transaction.Amount
+			}
+			tx.Save(&wallet)
+		}
+
+		if err := tx.Save(&transaction).Error; err != nil {
+			tx.Rollback()
 			ctx.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Không thể cập nhật giao dịch, vui lòng thử lại",
 			})
 			return
 		}
+
+		tx.Commit()
+
 		ctx.JSON(http.StatusOK, gin.H{
 			"message": "Cập nhật giao dịch thành công",
 			"data":    transaction,
@@ -151,12 +251,32 @@ func DeleteTransaction(db *gorm.DB) gin.HandlerFunc {
 			})
 			return
 		}
-		if err := db.Delete(&transaction).Error; err != nil {
+
+		tx := db.Begin()
+
+		// Hoàn tác ảnh hưởng ví
+		if transaction.WalletID != nil {
+			var wallet models.Wallet
+			if err := tx.First(&wallet, *transaction.WalletID).Error; err == nil {
+				if transaction.Type == "income" {
+					wallet.Balance -= transaction.Amount
+				} else {
+					wallet.Balance += transaction.Amount
+				}
+				tx.Save(&wallet)
+			}
+		}
+
+		if err := tx.Delete(&transaction).Error; err != nil {
+			tx.Rollback()
 			ctx.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Lỗi hệ thống, không thể xóa giao dịch lúc này",
 			})
 			return
 		}
+
+		tx.Commit()
+
 		ctx.JSON(http.StatusOK, gin.H{
 			"message": "Xóa giao dịch thành công",
 		})

@@ -38,8 +38,8 @@ func main() {
 	log.Println("✅ Kết nối Neon PostgreSQL thành công thông qua biến môi trường!")
 	DB = database
 
-	// Tự động Migrate các Model để đồng bộ schema với Database (tạo bảng, thêm cột còn thiếu)
-	err = database.AutoMigrate(&models.User{}, &models.Transaction{}, &models.Budget{}, &models.RecurringTransaction{})
+		// Tự động Migrate các Model để đồng bộ schema với Database (tạo bảng, thêm cột còn thiếu)
+	err = database.AutoMigrate(&models.User{}, &models.Transaction{}, &models.Budget{}, &models.RecurringTransaction{}, &models.Wallet{})
 	if err != nil {
 		log.Println("⚠️ Lỗi khi AutoMigrate:", err)
 	}
