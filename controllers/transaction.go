@@ -89,6 +89,11 @@ func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
 		}
 		tx.Commit()
 
+		// Tự động phân bổ income vào financial goals nếu có bật auto_allocate
+		if newTransaction.Type == "income" {
+			go AutoAllocateToGoals(db, userID, newTransaction.Amount)
+		}
+
 		c.JSON(http.StatusCreated, gin.H{
 			"message": "Đã thêm giao dịch thành công",
 			"data":    newTransaction,

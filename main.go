@@ -42,7 +42,7 @@ func main() {
 	DB = database
 
 		// Tự động Migrate các Model để đồng bộ schema với Database (tạo bảng, thêm cột còn thiếu)
-	err = database.AutoMigrate(&models.User{}, &models.Transaction{}, &models.Budget{}, &models.RecurringTransaction{}, &models.Wallet{}, &models.SchedulerLog{})
+	err = database.AutoMigrate(&models.User{}, &models.Transaction{}, &models.Budget{}, &models.RecurringTransaction{}, &models.Wallet{}, &models.SchedulerLog{}, &models.FinancialGoal{})
 	if err != nil {
 		log.Println("⚠️ Lỗi khi AutoMigrate:", err)
 	}

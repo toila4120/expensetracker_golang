@@ -88,5 +88,14 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		apiGroup.POST("/wallets", controllers.CreateWallet(db))
 		apiGroup.GET("/wallets/:id", controllers.GetWalletDetails(db))
 		apiGroup.POST("/wallets/:id/invite", controllers.InviteMember(db))
+
+		// Financial Goals
+		apiGroup.GET("/goals", controllers.GetGoals(db))
+		apiGroup.POST("/goals", controllers.CreateGoal(db))
+		apiGroup.GET("/goals/:id", controllers.GetGoalDetails(db))
+		apiGroup.PUT("/goals/:id", controllers.UpdateGoal(db))
+		apiGroup.DELETE("/goals/:id", controllers.DeleteGoal(db))
+		apiGroup.POST("/goals/:id/allocate", controllers.AllocateToGoal(db))
+		apiGroup.POST("/goals/:id/withdraw", controllers.WithdrawFromGoal(db))
 	}
 }
