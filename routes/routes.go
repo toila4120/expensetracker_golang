@@ -38,6 +38,12 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		})
 	})
 
+	r.HEAD("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status": "healthy",
+		})
+	})
+
 	authGroup := r.Group("/auth")
 	{
 		// Cú pháp: authGroup.POST("đường_dẫn", hàm_xử_lý)
@@ -97,5 +103,20 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		apiGroup.DELETE("/goals/:id", controllers.DeleteGoal(db))
 		apiGroup.POST("/goals/:id/allocate", controllers.AllocateToGoal(db))
 		apiGroup.POST("/goals/:id/withdraw", controllers.WithdrawFromGoal(db))
+
+		// Groups (Share Bill)
+		apiGroup.POST("/groups", controllers.CreateGroup(db))
+		apiGroup.GET("/groups", controllers.GetGroups(db))
+		apiGroup.GET("/groups/:id", controllers.GetGroupDetails(db))
+		apiGroup.POST("/groups/:id/members", controllers.AddMember(db))
+		apiGroup.DELETE("/groups/:id/members/:member_id", controllers.RemoveMember(db))
+
+		// Shared Bills
+		apiGroup.POST("/groups/:id/bills", controllers.CreateSharedBill(db))
+		apiGroup.GET("/groups/:id/bills", controllers.GetSharedBills(db))
+
+		// Balances & Settlement
+		apiGroup.GET("/groups/:id/balances", controllers.GetBalances(db))
+		apiGroup.POST("/groups/:id/settle", controllers.SettleDebt(db))
 	}
 }
