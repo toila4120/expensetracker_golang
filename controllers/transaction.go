@@ -91,7 +91,7 @@ func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
 
 		// Tự động phân bổ income vào financial goals nếu có bật auto_allocate
 		if newTransaction.Type == "income" {
-			go AutoAllocateToGoals(db, userID, newTransaction.Amount)
+			go AutoAllocateToGoals(db, userID, newTransaction.Amount, newTransaction.WalletID)
 		}
 
 		c.JSON(http.StatusCreated, gin.H{

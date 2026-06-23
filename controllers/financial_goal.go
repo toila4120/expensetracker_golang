@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"expensetracker/models"
+	"fmt"
 	"math"
 	"net/http"
 	"time"
@@ -9,6 +10,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// getPersonalWallet lấy ví cá nhân của user (wallet chỉ có 1 member là chính họ)
+func getPersonalWallet(db *gorm.DB, userID uint) (*models.Wallet, error) {
+	var wallet models.Wallet
+	err := db.Raw(`
+		SELECT w.* FROM wallets w
+	 INNER JOIN wallet_members wm ON wm.wallet_id = w.id
+	 WHERE w.created_by = ? AND w.deleted_at IS NULL
+	 GROUP BY w.id
+	 HAVING COUNT(wm.user_id) = 1
+	`, userID).Scan(&wallet).Error
+	if err != nil {
+		return nil, err
+	}
+	return &wallet, nil
+}
 
 type CreateGoalInput struct {
 	Name           string     `json:"name" binding:"required"`
@@ -276,7 +293,7 @@ type AllocateInput struct {
 	Amount int `json:"amount" binding:"required,gt=0"`
 }
 
-// AllocateToGoal phân bổ tiền vào mục tiêu
+// AllocateToGoal phân bổ tiền vào mục tiêu từ ví cá nhân
 func AllocateToGoal(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.MustGet("currentUserID").(uint)
@@ -297,36 +314,58 @@ func AllocateToGoal(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Kiểm tra user có đủ tiền không (income - expense)
-		var totalIncome int64
-		var totalExpense int64
-		db.Model(&models.Transaction{}).
-			Where("user_id = ? AND type = ?", userID, "income").
-			Select("COALESCE(SUM(amount), 0)").Scan(&totalIncome)
-		db.Model(&models.Transaction{}).
-			Where("user_id = ? AND type = ?", userID, "expense").
-			Select("COALESCE(SUM(amount), 0)").Scan(&totalExpense)
+		// Lấy ví cá nhân
+		wallet, err := getPersonalWallet(db, userID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Không tìm thấy ví cá nhân"})
+			return
+		}
 
-		// Tổng đã phân bổ vào các goal khác
-		var totalAllocatedToOther int64
-		db.Model(&models.FinancialGoal{}).
-			Where("user_id = ? AND id != ?", userID, goal.ID).
-			Select("COALESCE(SUM(current_amount), 0)").Scan(&totalAllocatedToOther)
-
-		availableBalance := int(totalIncome) - int(totalExpense) - int(totalAllocatedToOther)
-		if input.Amount > availableBalance {
+		// Kiểm tra số tiền không vượt quá goal còn thiếu
+		goalRemaining := goal.TargetAmount - goal.CurrentAmount
+		if input.Amount > goalRemaining {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error":            "Số tiền phân bổ vượt quá số dư khả dụng",
-				"available_balance": availableBalance,
+				"error":          "Số tiền vượt quá mục tiêu của quỹ",
+				"goal_remaining": goalRemaining,
 			})
 			return
 		}
 
+		// Tạo transaction ghi nhận việc phân bổ từ ví vào goal
+		transaction := models.Transaction{
+			UserID:   userID,
+			WalletID: &wallet.ID,
+			Type:     "expense",
+			Category: "goal_allocation",
+			Amount:   input.Amount,
+			Note:     fmt.Sprintf("Phân bổ vào mục tiêu: %s", goal.Name),
+			Date:     time.Now(),
+		}
+
+		// Dùng DB transaction để đảm bảo atomic
+		tx := db.Begin()
+
+		if err := tx.Create(&transaction).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo giao dịch"})
+			return
+		}
+
+		wallet.Balance -= input.Amount
+		if err := tx.Save(wallet).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể cập nhật số dư ví"})
+			return
+		}
+
 		goal.CurrentAmount += input.Amount
-		if err := db.Save(&goal).Error; err != nil {
+		if err := tx.Save(&goal).Error; err != nil {
+			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể phân bổ tiền vào mục tiêu"})
 			return
 		}
+
+		tx.Commit()
 
 		progress := 0.0
 		if goal.TargetAmount > 0 {
@@ -342,12 +381,13 @@ func AllocateToGoal(db *gorm.DB) gin.HandlerFunc {
 				"target_amount":   goal.TargetAmount,
 				"progress":        math.Round(progress*100) / 100,
 				"allocated_amount": input.Amount,
+				"wallet_balance":  wallet.Balance,
 			},
 		})
 	}
 }
 
-// WithdrawFromGoal rút tiền từ mục tiêu
+// WithdrawFromGoal rút tiền từ mục tiêu về ví cá nhân
 func WithdrawFromGoal(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.MustGet("currentUserID").(uint)
@@ -376,11 +416,48 @@ func WithdrawFromGoal(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Lấy ví cá nhân
+		wallet, err := getPersonalWallet(db, userID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Không tìm thấy ví cá nhân"})
+			return
+		}
+
+		// Tạo transaction ghi nhận việc rút tiền từ goal về ví
+		transaction := models.Transaction{
+			UserID:   userID,
+			WalletID: &wallet.ID,
+			Type:     "income",
+			Category: "goal_withdrawal",
+			Amount:   input.Amount,
+			Note:     fmt.Sprintf("Rút từ mục tiêu: %s", goal.Name),
+			Date:     time.Now(),
+		}
+
+		// Dùng DB transaction để đảm bảo atomic
+		tx := db.Begin()
+
+		if err := tx.Create(&transaction).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo giao dịch"})
+			return
+		}
+
+		wallet.Balance += input.Amount
+		if err := tx.Save(wallet).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể cập nhật số dư ví"})
+			return
+		}
+
 		goal.CurrentAmount -= input.Amount
-		if err := db.Save(&goal).Error; err != nil {
+		if err := tx.Save(&goal).Error; err != nil {
+			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể rút tiền từ mục tiêu"})
 			return
 		}
+
+		tx.Commit()
 
 		c.JSON(http.StatusOK, gin.H{
 			"message": "Rút tiền từ mục tiêu thành công",
@@ -390,6 +467,7 @@ func WithdrawFromGoal(db *gorm.DB) gin.HandlerFunc {
 				"current_amount": goal.CurrentAmount,
 				"target_amount":  goal.TargetAmount,
 				"withdrawn":      input.Amount,
+				"wallet_balance": wallet.Balance,
 			},
 		})
 	}
@@ -397,12 +475,28 @@ func WithdrawFromGoal(db *gorm.DB) gin.HandlerFunc {
 
 // AutoAllocateToGoals phân bổ tự động từ income vào các goal có bật auto_allocate
 // Gọi hàm này sau khi tạo income transaction
-func AutoAllocateToGoals(db *gorm.DB, userID uint, incomeAmount int) {
+func AutoAllocateToGoals(db *gorm.DB, userID uint, incomeAmount int, walletID *uint) {
 	var goals []models.FinancialGoal
 	db.Where("user_id = ? AND auto_allocate = ? AND is_active = ?", userID, true, true).Find(&goals)
 
 	if len(goals) == 0 {
 		return
+	}
+
+	// Lấy ví cá nhân nếu có walletID
+	var wallet *models.Wallet
+	if walletID != nil {
+		var w models.Wallet
+		if err := db.First(&w, *walletID).Error; err == nil {
+			wallet = &w
+		}
+	}
+	if wallet == nil {
+		var err error
+		wallet, err = getPersonalWallet(db, userID)
+		if err != nil {
+			return
+		}
 	}
 
 	remaining := incomeAmount
@@ -429,11 +523,37 @@ func AutoAllocateToGoals(db *gorm.DB, userID uint, incomeAmount int) {
 			allocateAmount = remaining
 		}
 
-		goal.CurrentAmount += allocateAmount
-		remaining -= allocateAmount
+		// Tạo transaction ghi nhận việc phân bổ từ ví vào goal
+		transaction := models.Transaction{
+			UserID:   userID,
+			WalletID: &wallet.ID,
+			Type:     "expense",
+			Category: "goal_allocation",
+			Amount:   allocateAmount,
+			Note:     fmt.Sprintf("Tự động phân bổ vào mục tiêu: %s", goal.Name),
+			Date:     time.Now(),
+		}
 
-		if err := db.Save(&goal).Error; err != nil {
+		tx := db.Begin()
+
+		if err := tx.Create(&transaction).Error; err != nil {
+			tx.Rollback()
 			continue
 		}
+
+		wallet.Balance -= allocateAmount
+		if err := tx.Save(wallet).Error; err != nil {
+			tx.Rollback()
+			continue
+		}
+
+		goal.CurrentAmount += allocateAmount
+		if err := tx.Save(&goal).Error; err != nil {
+			tx.Rollback()
+			continue
+		}
+
+		tx.Commit()
+		remaining -= allocateAmount
 	}
 }
