@@ -277,43 +277,38 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 		tx := db.Begin()
 
 		// Step 1: Find or create peer_to_peer group with exactly these members
-		var existingGroup models.Group
+		var groupID uint
+		foundGroup := false
 		
-		// Build list of all member user_ids and guest_names
+		// Build list of all member user_ids
 		var allUserIDs []uint
-		var allGuestNames []string
 		for key := range memberMap {
 			if key.UserID != nil {
 				allUserIDs = append(allUserIDs, *key.UserID)
-			} else {
-				allGuestNames = append(allGuestNames, key.GuestName)
 			}
 		}
 
-		// Try to find existing peer_to_peer group with exact same members
-		foundGroup := false
-		
+		// Try to find existing peer_to_peer group
 		if len(allUserIDs) > 0 {
 			var candidateGroups []models.Group
-			// Find all peer_to_peer groups that have members with these user_ids
-			err := db.Raw(`
-				SELECT DISTINCT g.* FROM groups g
-				INNER JOIN group_members gm ON gm.group_id = g.id
+			err := tx.Raw(`
+				SELECT g.* FROM groups g
 				WHERE g.type = 'peer_to_peer' 
 				AND g.deleted_at IS NULL
-				AND gm.user_id IN (?)
-				GROUP BY g.id
-				HAVING (
-					SELECT COUNT(*) FROM group_members 
-					WHERE group_id = g.id AND deleted_at IS NULL
-				) = ?
-			`, allUserIDs, len(memberMap)).Scan(&candidateGroups).Error
+				AND g.id IN (
+					SELECT gm.group_id FROM group_members gm 
+					WHERE gm.user_id IN (?)
+					AND gm.deleted_at IS NULL
+					GROUP BY gm.group_id
+					HAVING COUNT(DISTINCT gm.user_id) = ?
+				)
+			`, allUserIDs, len(allUserIDs)).Scan(&candidateGroups).Error
 			
 			if err == nil {
 				for _, candidate := range candidateGroups {
-					// Verify exact match
+					// Verify exact match by checking all members
 					var candidateMembers []models.GroupMember
-					db.Where("group_id = ?", candidate.ID).Find(&candidateMembers)
+					tx.Where("group_id = ?", candidate.ID).Find(&candidateMembers)
 					
 					if len(candidateMembers) != len(memberMap) {
 						continue
@@ -346,7 +341,7 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 					}
 					
 					if match {
-						existingGroup = candidate
+						groupID = candidate.ID
 						foundGroup = true
 						break
 					}
@@ -354,18 +349,14 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		var groupID uint
-
-		if foundGroup {
-			groupID = existingGroup.ID
-		} else {
+		if !foundGroup {
 			// Create new peer_to_peer group
 			// Generate name from member names
 			var nameParts []string
 			for key := range memberMap {
 				if key.UserID != nil {
 					var user models.User
-					if db.First(&user, *key.UserID).Error == nil {
+					if tx.First(&user, *key.UserID).Error == nil {
 						nameParts = append(nameParts, user.Username)
 					}
 				} else {
@@ -414,9 +405,13 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Step 2: Get all group members to map input members to group_member_ids
+		// Step 2: Get all group members using transaction to ensure consistency
 		var allMembers []models.GroupMember
-		db.Where("group_id = ?", groupID).Find(&allMembers)
+		if err := tx.Where("group_id = ?", groupID).Find(&allMembers).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể lấy danh sách thành viên"})
+			return
+		}
 
 		memberIDMap := make(map[string]uint) // key: "user_id:X" or "guest_name:X"
 		for _, m := range allMembers {
