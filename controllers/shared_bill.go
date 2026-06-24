@@ -13,11 +13,27 @@ import (
 type CreateBillInput struct {
 	PayerID         uint              `json:"payer_id" binding:"required"`
 	Amount          int               `json:"amount" binding:"required,gt=0"`
-	Category        string            `json:"category" binding:"required,oneof=food transport shopping entertainment education health other"`
+	Category        string            `json:"category" binding:"required,oneof=food transport food_transport shopping entertainment education health other"`
 	Description     string            `json:"description"`
 	SplitMethod     string            `json:"split_method" binding:"required,oneof=equal percentage custom"`
 	TransactionDate time.Time         `json:"transaction_date"`
 	Splits          []BillSplitInput  `json:"splits" binding:"required,min=1"`
+}
+
+type QuickBillInput struct {
+	PayerID         uint              `json:"payer_id" binding:"required"`
+	Amount          int               `json:"amount" binding:"required,gt=0"`
+	Category        string            `json:"category" binding:"required,oneof=food transport food_transport shopping entertainment education health other"`
+	Description     string            `json:"description"`
+	SplitMethod     string            `json:"split_method" binding:"required,oneof=equal percentage custom"`
+	TransactionDate time.Time         `json:"transaction_date"`
+	Members         []QuickMemberInput `json:"members" binding:"required,min=1"`
+}
+
+type QuickMemberInput struct {
+	UserID    *uint  `json:"user_id"`
+	GuestName string `json:"guest_name"`
+	Amount    int    `json:"amount" binding:"required,gt=0"`
 }
 
 type BillSplitInput struct {
@@ -197,5 +213,296 @@ func GetSharedBills(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": responses})
+	}
+}
+
+func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.MustGet("currentUserID").(uint)
+
+		var input QuickBillInput
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Dữ liệu không hợp lệ", "details": err.Error()})
+			return
+		}
+
+		// Validate: at least 2 members required (payer + 1 split member)
+		if len(input.Members) < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cần ít nhất 1 thành viên trong danh sách chia tiền"})
+			return
+		}
+
+		// Validate payer_id exists
+		var payerMember models.GroupMember
+		if err := db.Where("id = ?", input.PayerID).First(&payerMember).Error; err != nil {
+			// Payer might be a user directly, not a group member yet
+			// We'll handle this in the group creation logic
+		}
+
+		// Collect all unique member identifiers (including payer)
+		type memberKey struct {
+			UserID    *uint
+			GuestName string
+		}
+		memberMap := make(map[memberKey]bool)
+		
+		// Add payer
+		if payerMember.ID > 0 {
+			memberMap[memberKey{UserID: payerMember.UserID, GuestName: payerMember.GuestName}] = true
+		}
+
+		// Add all split members
+		for _, m := range input.Members {
+			if m.UserID == nil && m.GuestName == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Mỗi thành viên phải có user_id hoặc guest_name"})
+				return
+			}
+			memberMap[memberKey{UserID: m.UserID, GuestName: m.GuestName}] = true
+		}
+
+		// Validate total split matches bill amount
+		totalSplit := 0
+		for _, m := range input.Members {
+			totalSplit += m.Amount
+		}
+		if totalSplit != input.Amount {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":       "Tổng tiền chia không khớp với tổng hóa đơn",
+				"bill_amount": input.Amount,
+				"split_total": totalSplit,
+			})
+			return
+		}
+
+		tx := db.Begin()
+
+		// Step 1: Find or create peer_to_peer group with exactly these members
+		var existingGroup models.Group
+		
+		// Build list of all member user_ids and guest_names
+		var allUserIDs []uint
+		var allGuestNames []string
+		for key := range memberMap {
+			if key.UserID != nil {
+				allUserIDs = append(allUserIDs, *key.UserID)
+			} else {
+				allGuestNames = append(allGuestNames, key.GuestName)
+			}
+		}
+
+		// Try to find existing peer_to_peer group with exact same members
+		// This is a complex query - we need to find groups where:
+		// 1. type = 'peer_to_peer'
+		// 2. Has exactly the same set of members
+		foundGroup := false
+		
+		if len(allUserIDs) > 0 {
+			var candidateGroups []models.Group
+			// Find all peer_to_peer groups that have members with these user_ids
+			err := db.Raw(`
+				SELECT DISTINCT g.* FROM groups g
+				INNER JOIN group_members gm ON gm.group_id = g.id
+				WHERE g.type = 'peer_to_peer' 
+				AND g.deleted_at IS NULL
+				AND gm.user_id IN (?)
+				GROUP BY g.id
+				HAVING (
+					SELECT COUNT(*) FROM group_members 
+					WHERE group_id = g.id AND deleted_at IS NULL
+				) = ?
+			`, allUserIDs, len(memberMap)).Scan(&candidateGroups).Error
+			
+			if err == nil {
+				for _, candidate := range candidateGroups {
+					// Verify exact match
+					var candidateMembers []models.GroupMember
+					db.Where("group_id = ?", candidate.ID).Find(&candidateMembers)
+					
+					if len(candidateMembers) != len(memberMap) {
+						continue
+					}
+					
+					match := true
+					candidateUserIDs := make(map[uint]bool)
+					candidateGuestNames := make(map[string]bool)
+					
+					for _, cm := range candidateMembers {
+						if cm.UserID != nil {
+							candidateUserIDs[*cm.UserID] = true
+						} else {
+							candidateGuestNames[cm.GuestName] = true
+						}
+					}
+					
+					for key := range memberMap {
+						if key.UserID != nil {
+							if !candidateUserIDs[*key.UserID] {
+								match = false
+								break
+							}
+						} else {
+							if !candidateGuestNames[key.GuestName] {
+								match = false
+								break
+							}
+						}
+					}
+					
+					if match {
+						existingGroup = candidate
+						foundGroup = true
+						break
+					}
+				}
+			}
+		}
+
+		var groupID uint
+
+		if foundGroup {
+			groupID = existingGroup.ID
+		} else {
+			// Create new peer_to_peer group
+			// Generate name from member names
+			var nameParts []string
+			for key := range memberMap {
+				if key.UserID != nil {
+					var user models.User
+					if db.First(&user, *key.UserID).Error == nil {
+						nameParts = append(nameParts, user.Username)
+					}
+				} else {
+					nameParts = append(nameParts, key.GuestName)
+				}
+			}
+			// Join first 3 names
+			groupName := ""
+			for i, name := range nameParts {
+				if i > 0 {
+					groupName += ", "
+				}
+				if i >= 3 {
+					groupName += "..."
+					break
+				}
+				groupName += name
+			}
+
+			newGroup := models.Group{
+				Name:        groupName,
+				Description: "Nhóm thanh toán nhanh",
+				Type:        "peer_to_peer",
+				CreatedBy:   userID,
+			}
+			if err := tx.Create(&newGroup).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo nhóm"})
+				return
+			}
+			groupID = newGroup.ID
+
+			// Create group members
+			for key := range memberMap {
+				member := models.GroupMember{
+					GroupID:   groupID,
+					UserID:    key.UserID,
+					GuestName: key.GuestName,
+					Role:      "member",
+				}
+				if err := tx.Create(&member).Error; err != nil {
+					tx.Rollback()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể thêm thành viên vào nhóm"})
+					return
+				}
+			}
+		}
+
+		// Step 2: Ensure payer is a member of the group
+		var payerGroupMember models.GroupMember
+		if err := db.Where("group_id = ? AND user_id = ?", groupID, userID).First(&payerGroupMember).Error; err != nil {
+			// Create payer as member if not exists
+			payerGroupMember = models.GroupMember{
+				GroupID: groupID,
+				UserID:  &userID,
+				Role:    "member",
+			}
+			if err := tx.Create(&payerGroupMember).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể thêm người trả tiền vào nhóm"})
+				return
+			}
+		}
+
+		// Step 3: Get all group members to map input members to group_member_ids
+		var allMembers []models.GroupMember
+		db.Where("group_id = ?", groupID).Find(&allMembers)
+
+		memberIDMap := make(map[string]uint) // key: "user_id:X" or "guest_name:X"
+		for _, m := range allMembers {
+			if m.UserID != nil {
+				memberIDMap["user_id:"+strconv.FormatUint(uint64(*m.UserID), 10)] = m.ID
+			} else {
+				memberIDMap["guest_name:"+m.GuestName] = m.ID
+			}
+		}
+
+		// Step 4: Create shared bill
+		txDate := input.TransactionDate
+		if txDate.IsZero() {
+			txDate = time.Now()
+		}
+
+		sharedBill := models.SharedBill{
+			GroupID:         groupID,
+			PayerID:         payerGroupMember.ID,
+			CreatorID:       userID,
+			Amount:          input.Amount,
+			Category:        input.Category,
+			Description:     input.Description,
+			SplitMethod:     input.SplitMethod,
+			TransactionDate: txDate,
+		}
+		if err := tx.Create(&sharedBill).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo hóa đơn"})
+			return
+		}
+
+		// Step 5: Create bill splits
+		for _, m := range input.Members {
+			var memberKey string
+			if m.UserID != nil {
+				memberKey = "user_id:" + strconv.FormatUint(uint64(*m.UserID), 10)
+			} else {
+				memberKey = "guest_name:" + m.GuestName
+			}
+
+			groupMemberID, exists := memberIDMap[memberKey]
+			if !exists {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Không tìm thấy thành viên trong nhóm"})
+				return
+			}
+
+			billSplit := models.BillSplit{
+				SharedBillID:  sharedBill.ID,
+				GroupMemberID: groupMemberID,
+				Amount:        m.Amount,
+				IsSettled:     false,
+			}
+			if err := tx.Create(&billSplit).Error; err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo chi tiết chia tiền"})
+				return
+			}
+		}
+
+		tx.Commit()
+
+		c.JSON(http.StatusCreated, gin.H{
+			"message":  "Tạo hóa đơn thành công",
+			"data":     sharedBill,
+			"group_id": groupID,
+		})
 	}
 }

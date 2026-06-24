@@ -203,6 +203,12 @@ func SettleDebt(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Validate from_member_id != to_member_id
+		if input.FromMemberID == input.ToMemberID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Người trả và người nhận không thể là cùng một người"})
+			return
+		}
+
 		var isMember int64
 		db.Model(&models.GroupMember{}).Where("group_id = ? AND user_id = ?", groupID, userID).Count(&isMember)
 		if isMember == 0 {
@@ -219,6 +225,57 @@ func SettleDebt(db *gorm.DB) gin.HandlerFunc {
 		var toMember models.GroupMember
 		if err := db.Where("id = ? AND group_id = ?", input.ToMemberID, groupID).First(&toMember).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Thành viên nhận tiền không hợp lệ"})
+			return
+		}
+
+		// Validate: Settlement amount cannot exceed actual debt
+		// Calculate current balance for fromMember
+		var bills []models.SharedBill
+		db.Where("group_id = ?", groupID).Find(&bills)
+
+		fromBalance := 0
+		for _, bill := range bills {
+			// Credit: money the member paid
+			if bill.PayerID == input.FromMemberID {
+				fromBalance += bill.Amount
+			}
+			// Debit: money the member owes
+			var splits []models.BillSplit
+			db.Where("shared_bill_id = ? AND group_member_id = ? AND is_settled = ?", bill.ID, input.FromMemberID, false).Find(&splits)
+			for _, split := range splits {
+				fromBalance -= split.Amount
+			}
+		}
+
+		// Apply existing settlements
+		var existingSettlements []models.Settlement
+		db.Where("group_id = ?", groupID).Find(&existingSettlements)
+		for _, s := range existingSettlements {
+			if s.FromID == input.FromMemberID {
+				fromBalance += s.Amount
+			}
+			if s.ToID == input.FromMemberID {
+				fromBalance -= s.Amount
+			}
+		}
+
+		// If balance >= 0, member doesn't owe money
+		if fromBalance >= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":    "Thành viên này không nợ tiền",
+				"balance":  fromBalance,
+			})
+			return
+		}
+
+		// Check if settlement amount exceeds debt
+		actualDebt := -fromBalance
+		if input.Amount > actualDebt {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":         "Số tiền trả nợ vượt quá số tiền đang nợ",
+				"settle_amount": input.Amount,
+				"actual_debt":   actualDebt,
+			})
 			return
 		}
 

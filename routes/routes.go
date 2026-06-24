@@ -115,6 +115,9 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		apiGroup.POST("/groups/:id/bills", controllers.CreateSharedBill(db))
 		apiGroup.GET("/groups/:id/bills", controllers.GetSharedBills(db))
 
+		// Quick Bill (peer_to_peer)
+		apiGroup.POST("/bills/quick", controllers.CreateQuickBill(db))
+
 		// Balances & Settlement
 		apiGroup.GET("/groups/:id/balances", controllers.GetBalances(db))
 		apiGroup.POST("/groups/:id/settle", controllers.SettleDebt(db))

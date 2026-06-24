@@ -12,6 +12,7 @@ import (
 type CreateGroupInput struct {
 	Name        string `json:"name" binding:"required"`
 	Description string `json:"description"`
+	Type        string `json:"type" binding:"omitempty,oneof=regular peer_to_peer"` // Default: regular
 }
 
 type AddMemberInput struct {
@@ -29,11 +30,18 @@ func CreateGroup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Default type to "regular" if not provided
+		groupType := input.Type
+		if groupType == "" {
+			groupType = "regular"
+		}
+
 		tx := db.Begin()
 
 		group := models.Group{
 			Name:        input.Name,
 			Description: input.Description,
+			Type:        groupType,
 			CreatedBy:   userID,
 		}
 		if err := tx.Create(&group).Error; err != nil {
