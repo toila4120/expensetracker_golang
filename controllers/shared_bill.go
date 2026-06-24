@@ -226,43 +226,19 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Validate: at least 2 members required (payer + 1 split member)
+		// Validate: at least 1 member in splits
 		if len(input.Members) < 1 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Cần ít nhất 1 thành viên trong danh sách chia tiền"})
 			return
 		}
 
-		// Validate payer_id exists
-		var payerMember models.GroupMember
-		if err := db.Where("id = ?", input.PayerID).First(&payerMember).Error; err != nil {
-			// Payer might be a user directly, not a group member yet
-			// We'll handle this in the group creation logic
-		}
-
-		// Collect all unique member identifiers (including payer)
-		type memberKey struct {
-			UserID    *uint
-			GuestName string
-		}
-		memberMap := make(map[memberKey]bool)
-		
-		// Add payer
-		if payerMember.ID > 0 {
-			memberMap[memberKey{UserID: payerMember.UserID, GuestName: payerMember.GuestName}] = true
-		}
-
-		// Add all split members
-		for _, m := range input.Members {
-			if m.UserID == nil && m.GuestName == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Mỗi thành viên phải có user_id hoặc guest_name"})
-				return
-			}
-			memberMap[memberKey{UserID: m.UserID, GuestName: m.GuestName}] = true
-		}
-
 		// Validate total split matches bill amount
 		totalSplit := 0
 		for _, m := range input.Members {
+			if m.Amount <= 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Số tiền chia phải lớn hơn 0"})
+				return
+			}
 			totalSplit += m.Amount
 		}
 		if totalSplit != input.Amount {
@@ -272,6 +248,30 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 				"split_total": totalSplit,
 			})
 			return
+		}
+
+		// Validate each member has user_id or guest_name
+		for _, m := range input.Members {
+			if m.UserID == nil && m.GuestName == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Mỗi thành viên phải có user_id hoặc guest_name"})
+				return
+			}
+		}
+
+		// Collect all unique member identifiers (including payer)
+		type memberKey struct {
+			UserID    *uint
+			GuestName string
+		}
+		memberMap := make(map[memberKey]bool)
+		
+		// Add payer (payer_id is user.id)
+		payerUserID := input.PayerID
+		memberMap[memberKey{UserID: &payerUserID}] = true
+
+		// Add all split members
+		for _, m := range input.Members {
+			memberMap[memberKey{UserID: m.UserID, GuestName: m.GuestName}] = true
 		}
 
 		tx := db.Begin()
@@ -291,9 +291,6 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Try to find existing peer_to_peer group with exact same members
-		// This is a complex query - we need to find groups where:
-		// 1. type = 'peer_to_peer'
-		// 2. Has exactly the same set of members
 		foundGroup := false
 		
 		if len(allUserIDs) > 0 {
@@ -417,23 +414,7 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Step 2: Ensure payer is a member of the group
-		var payerGroupMember models.GroupMember
-		if err := db.Where("group_id = ? AND user_id = ?", groupID, userID).First(&payerGroupMember).Error; err != nil {
-			// Create payer as member if not exists
-			payerGroupMember = models.GroupMember{
-				GroupID: groupID,
-				UserID:  &userID,
-				Role:    "member",
-			}
-			if err := tx.Create(&payerGroupMember).Error; err != nil {
-				tx.Rollback()
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể thêm người trả tiền vào nhóm"})
-				return
-			}
-		}
-
-		// Step 3: Get all group members to map input members to group_member_ids
+		// Step 2: Get all group members to map input members to group_member_ids
 		var allMembers []models.GroupMember
 		db.Where("group_id = ?", groupID).Find(&allMembers)
 
@@ -446,6 +427,14 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// Step 3: Find payer's group_member_id
+		payerGroupMemberID, exists := memberIDMap["user_id:"+strconv.FormatUint(uint64(payerUserID), 10)]
+		if !exists {
+			tx.Rollback()
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Không tìm thấy người trả tiền trong nhóm"})
+			return
+		}
+
 		// Step 4: Create shared bill
 		txDate := input.TransactionDate
 		if txDate.IsZero() {
@@ -454,7 +443,7 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 
 		sharedBill := models.SharedBill{
 			GroupID:         groupID,
-			PayerID:         payerGroupMember.ID,
+			PayerID:         payerGroupMemberID,
 			CreatorID:       userID,
 			Amount:          input.Amount,
 			Category:        input.Category,
