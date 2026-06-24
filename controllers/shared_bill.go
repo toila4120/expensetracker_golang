@@ -258,20 +258,30 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Collect all unique member identifiers (including payer)
-		type memberKey struct {
-			UserID    *uint
-			GuestName string
+		// Collect all unique member identifiers using string keys to avoid pointer issues
+		type memberInfo struct {
+			UserID    uint   // 0 if guest
+			GuestName string // empty if user
 		}
-		memberMap := make(map[memberKey]bool)
+		memberMap := make(map[string]memberInfo) // key: "user:X" or "guest:Y"
 		
 		// Add payer (payer_id is user.id)
 		payerUserID := input.PayerID
-		memberMap[memberKey{UserID: &payerUserID}] = true
+		memberMap["user:"+strconv.FormatUint(uint64(payerUserID), 10)] = memberInfo{
+			UserID: payerUserID,
+		}
 
 		// Add all split members
 		for _, m := range input.Members {
-			memberMap[memberKey{UserID: m.UserID, GuestName: m.GuestName}] = true
+			if m.UserID != nil {
+				memberMap["user:"+strconv.FormatUint(uint64(*m.UserID), 10)] = memberInfo{
+					UserID: *m.UserID,
+				}
+			} else {
+				memberMap["guest:"+m.GuestName] = memberInfo{
+					GuestName: m.GuestName,
+				}
+			}
 		}
 
 		tx := db.Begin()
@@ -282,9 +292,9 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 		
 		// Build list of all member user_ids
 		var allUserIDs []uint
-		for key := range memberMap {
-			if key.UserID != nil {
-				allUserIDs = append(allUserIDs, *key.UserID)
+		for _, info := range memberMap {
+			if info.UserID > 0 {
+				allUserIDs = append(allUserIDs, info.UserID)
 			}
 		}
 
@@ -310,6 +320,7 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 					var candidateMembers []models.GroupMember
 					tx.Where("group_id = ?", candidate.ID).Find(&candidateMembers)
 					
+					// Count: users + guests must equal memberMap size
 					if len(candidateMembers) != len(memberMap) {
 						continue
 					}
@@ -326,14 +337,15 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 						}
 					}
 					
-					for key := range memberMap {
-						if key.UserID != nil {
-							if !candidateUserIDs[*key.UserID] {
+					// Check all members in memberMap exist in candidate
+					for _, info := range memberMap {
+						if info.UserID > 0 {
+							if !candidateUserIDs[info.UserID] {
 								match = false
 								break
 							}
 						} else {
-							if !candidateGuestNames[key.GuestName] {
+							if !candidateGuestNames[info.GuestName] {
 								match = false
 								break
 							}
@@ -353,14 +365,14 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			// Create new peer_to_peer group
 			// Generate name from member names
 			var nameParts []string
-			for key := range memberMap {
-				if key.UserID != nil {
+			for _, info := range memberMap {
+				if info.UserID > 0 {
 					var user models.User
-					if tx.First(&user, *key.UserID).Error == nil {
+					if tx.First(&user, info.UserID).Error == nil {
 						nameParts = append(nameParts, user.Username)
 					}
 				} else {
-					nameParts = append(nameParts, key.GuestName)
+					nameParts = append(nameParts, info.GuestName)
 				}
 			}
 			// Join first 3 names
@@ -390,11 +402,15 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			groupID = newGroup.ID
 
 			// Create group members
-			for key := range memberMap {
+			for _, info := range memberMap {
+				var userIDPtr *uint
+				if info.UserID > 0 {
+					userIDPtr = &info.UserID
+				}
 				member := models.GroupMember{
 					GroupID:   groupID,
-					UserID:    key.UserID,
-					GuestName: key.GuestName,
+					UserID:    userIDPtr,
+					GuestName: info.GuestName,
 					Role:      "member",
 				}
 				if err := tx.Create(&member).Error; err != nil {
@@ -405,7 +421,7 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Step 2: Get all group members using transaction to ensure consistency
+		// Step 2: Get all group members using transaction
 		var allMembers []models.GroupMember
 		if err := tx.Where("group_id = ?", groupID).Find(&allMembers).Error; err != nil {
 			tx.Rollback()
@@ -413,17 +429,17 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		memberIDMap := make(map[string]uint) // key: "user_id:X" or "guest_name:X"
+		memberIDMap := make(map[string]uint) // key: "user:X" or "guest:Y", value: group_member.id
 		for _, m := range allMembers {
 			if m.UserID != nil {
-				memberIDMap["user_id:"+strconv.FormatUint(uint64(*m.UserID), 10)] = m.ID
+				memberIDMap["user:"+strconv.FormatUint(uint64(*m.UserID), 10)] = m.ID
 			} else {
-				memberIDMap["guest_name:"+m.GuestName] = m.ID
+				memberIDMap["guest:"+m.GuestName] = m.ID
 			}
 		}
 
 		// Step 3: Find payer's group_member_id
-		payerGroupMemberID, exists := memberIDMap["user_id:"+strconv.FormatUint(uint64(payerUserID), 10)]
+		payerGroupMemberID, exists := memberIDMap["user:"+strconv.FormatUint(uint64(payerUserID), 10)]
 		if !exists {
 			tx.Rollback()
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Không tìm thấy người trả tiền trong nhóm"})
@@ -456,9 +472,9 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 		for _, m := range input.Members {
 			var memberKey string
 			if m.UserID != nil {
-				memberKey = "user_id:" + strconv.FormatUint(uint64(*m.UserID), 10)
+				memberKey = "user:" + strconv.FormatUint(uint64(*m.UserID), 10)
 			} else {
-				memberKey = "guest_name:" + m.GuestName
+				memberKey = "guest:" + m.GuestName
 			}
 
 			groupMemberID, exists := memberIDMap[memberKey]
