@@ -141,3 +141,56 @@ func DeleteBudget(db *gorm.DB) gin.HandlerFunc {
 		ctx.JSON(http.StatusOK, gin.H{"message": "Xóa ngân sách thành công"})
 	}
 }
+
+type UpdateBudgetInput struct {
+	Category string `json:"category"`
+	Amount   int    `json:"amount" binding:"omitempty,gt=0"`
+	Month    int    `json:"month"`
+	Year     int    `json:"year"`
+}
+
+// UpdateBudget cập nhật ngân sách
+func UpdateBudget(db *gorm.DB) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		userID := ctx.MustGet("currentUserID").(uint)
+		budgetID := ctx.Param("id")
+
+		var budget models.Budget
+		if err := db.Where("id = ? AND user_id = ?", budgetID, userID).First(&budget).Error; err != nil {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy ngân sách"})
+			return
+		}
+
+		var input UpdateBudgetInput
+		if err := ctx.ShouldBindJSON(&input); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Dữ liệu không hợp lệ",
+				"details": err.Error(),
+			})
+			return
+		}
+
+		if input.Category != "" {
+			budget.Category = input.Category
+		}
+		if input.Amount > 0 {
+			budget.Amount = input.Amount
+		}
+		if input.Month > 0 {
+			budget.Month = input.Month
+		}
+		if input.Year > 0 {
+			budget.Year = input.Year
+		}
+
+		if err := db.Save(&budget).Error; err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể cập nhật ngân sách"})
+			return
+		}
+
+		ctx.JSON(http.StatusOK, gin.H{
+			"message": "Cập nhật ngân sách thành công",
+			"data":    budget,
+		})
+	}
+}

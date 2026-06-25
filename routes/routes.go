@@ -75,6 +75,7 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationServ
 		// Budget
 		apiGroup.GET("/budgets", controllers.GetBudgets(db))
 		apiGroup.POST("/budgets", controllers.CreateBudget(db))
+		apiGroup.PUT("/budgets/:id", controllers.UpdateBudget(db))
 		apiGroup.DELETE("/budgets/:id", controllers.DeleteBudget(db))
 
 		// Search & Analytics
