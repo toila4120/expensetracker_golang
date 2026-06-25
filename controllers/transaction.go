@@ -3,6 +3,7 @@ package controllers
 
 import (
 	"expensetracker/models"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -88,6 +89,11 @@ func CreateTransaction(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 		tx.Commit()
+
+		// Kiểm tra ngân sách và gửi thông báo nếu vượt ngưỡng
+		if newTransaction.Type == "expense" && NotifSvc != nil {
+			go checkBudgetNotification(db, userID, newTransaction.Category, transactionDate)
+		}
 
 		// Tự động phân bổ income vào financial goals nếu có bật auto_allocate
 		if newTransaction.Type == "income" {
@@ -285,5 +291,55 @@ func DeleteTransaction(db *gorm.DB) gin.HandlerFunc {
 		ctx.JSON(http.StatusOK, gin.H{
 			"message": "Xóa giao dịch thành công",
 		})
+	}
+}
+
+// checkBudgetNotification kiểm tra ngân sách và gửi thông báo khi vượt ngưỡng
+func checkBudgetNotification(db *gorm.DB, userID uint, category string, transactionDate time.Time) {
+	month := int(transactionDate.Month())
+	year := transactionDate.Year()
+
+	var budget models.Budget
+	if err := db.Where("user_id = ? AND category = ? AND month = ? AND year = ?",
+		userID, category, month, year).First(&budget).Error; err != nil {
+		return // Không có ngân sách cho danh mục này
+	}
+
+	// Tính tổng chi tiêu trong tháng cho danh mục này
+	var totalSpent int
+	db.Model(&models.Transaction{}).
+		Where("user_id = ? AND category = ? AND type = ? AND MONTH(date) = ? AND YEAR(date) = ?",
+			userID, category, "expense", month, year).
+		Select("COALESCE(SUM(amount), 0)").
+		Scan(&totalSpent)
+
+	// Kiểm tra ngưỡng 80%
+	if totalSpent > budget.Amount*80/100 && totalSpent <= budget.Amount {
+		NotifSvc.CreateAndDispatch(
+			userID,
+			"budget_warning",
+			"Cảnh báo ngân sách",
+			fmt.Sprintf("Chi tiêu danh mục %s đã vượt 80%% ngân sách (%d/%d VND)",
+				category, totalSpent, budget.Amount),
+			nil,
+			false, "", "", "",
+		)
+	}
+
+	// Kiểm tra vượt ngân sách
+	if totalSpent > budget.Amount {
+		NotifSvc.CreateAndDispatch(
+			userID,
+			"budget_exceeded",
+			"Vượt ngân sách",
+			fmt.Sprintf("Chi tiêu danh mục %s đã vượt ngân sách (%d/%d VND)",
+				category, totalSpent, budget.Amount),
+			nil,
+			true,
+			NotifSvc.GetUserEmail(userID),
+			fmt.Sprintf("Cảnh báo: Vượt ngân sách danh mục %s", category),
+			fmt.Sprintf("Bạn đã chi tiêu %d VND cho danh mục %s, vượt quá ngân sách %d VND.",
+				totalSpent, category, budget.Amount),
+		)
 	}
 }

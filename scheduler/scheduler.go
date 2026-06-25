@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"expensetracker/models"
+	"expensetracker/services"
+	"fmt"
 	"log"
 	"time"
 
@@ -10,15 +12,17 @@ import (
 )
 
 type Scheduler struct {
-	cron *cron.Cron
-	db   *gorm.DB
+	cron    *cron.Cron
+	db      *gorm.DB
+	notifSvc *services.NotificationService
 }
 
-func New(db *gorm.DB) *Scheduler {
+func New(db *gorm.DB, notifSvc *services.NotificationService) *Scheduler {
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
 	return &Scheduler{
-		cron: cron.New(cron.WithLocation(loc)),
-		db:   db,
+		cron:    cron.New(cron.WithLocation(loc)),
+		db:      db,
+		notifSvc: notifSvc,
 	}
 }
 
@@ -164,6 +168,19 @@ func (s *Scheduler) processRecurringTransactionsForDate(targetDate time.Time) {
 		log.Printf("✅ Scheduler: Đã tạo transaction từ recurring #%d (user %d) - %s %d VND - %s\n",
 			recurring.ID, recurring.UserID, recurring.Type, recurring.Amount, recurring.Category)
 		createdCount++
+
+		// Gửi thông báo cho user
+		if s.notifSvc != nil {
+			s.notifSvc.CreateAndDispatch(
+				recurring.UserID,
+				"recurring_created",
+				"Giao dịch định kỳ",
+				fmt.Sprintf("Đã tạo giao dịch tự động: %s %d VND - %s",
+					recurring.Type, recurring.Amount, recurring.Category),
+				nil,
+				false, "", "", "",
+			)
+		}
 	}
 
 	if createdCount > 0 {

@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"expensetracker/models"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -288,6 +289,25 @@ func SettleDebt(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Create(&settlement).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo bản ghi trả nợ"})
 			return
+		}
+
+		// Gửi thông báo cho người nhận tiền
+		if NotifSvc != nil && toMember.UserID != nil {
+			var fromUser models.User
+			db.First(&fromUser, fromMember.UserID)
+
+			var group models.Group
+			db.First(&group, groupID)
+
+			NotifSvc.CreateAndDispatch(
+				*toMember.UserID,
+				"settlement",
+				"Nhận tiền trả nợ",
+				fmt.Sprintf("%s đã trả bạn %d VND trong nhóm %s",
+					fromUser.Username, input.Amount, group.Name),
+				nil,
+				false, "", "", "",
+			)
 		}
 
 		c.JSON(http.StatusCreated, gin.H{

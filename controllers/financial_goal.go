@@ -372,6 +372,9 @@ func AllocateToGoal(db *gorm.DB) gin.HandlerFunc {
 			progress = float64(goal.CurrentAmount) / float64(goal.TargetAmount) * 100
 		}
 
+		// Check goal notifications
+		go checkGoalNotifications(db, userID, &goal)
+
 		c.JSON(http.StatusOK, gin.H{
 			"message": "Phân bổ tiền vào mục tiêu thành công",
 			"data": gin.H{
@@ -555,5 +558,55 @@ func AutoAllocateToGoals(db *gorm.DB, userID uint, incomeAmount int, walletID *u
 
 		tx.Commit()
 		remaining -= allocateAmount
+
+		// Check goal notifications after auto-allocation
+		if NotifSvc != nil {
+			go checkGoalNotifications(db, userID, &goal)
+		}
+	}
+}
+
+// checkGoalNotifications kiểm tra và gửi thông báo cho goal
+func checkGoalNotifications(db *gorm.DB, userID uint, goal *models.FinancialGoal) {
+	if NotifSvc == nil {
+		return
+	}
+
+	// Goal completed
+	if goal.CurrentAmount >= goal.TargetAmount {
+		NotifSvc.CreateAndDispatch(
+			userID,
+			"goal_completed",
+			"Mục tiêu hoàn thành!",
+			fmt.Sprintf("Mục tiêu %s đã hoàn thành (%d/%d VND)",
+				goal.Name, goal.CurrentAmount, goal.TargetAmount),
+			nil,
+			true,
+			NotifSvc.GetUserEmail(userID),
+			fmt.Sprintf("Chúc mừng! Mục tiêu %s đã hoàn thành", goal.Name),
+			fmt.Sprintf("Mục tiêu tiết kiệm %s của bạn đã hoàn thành với số tiền %d VND.",
+				goal.Name, goal.CurrentAmount),
+		)
+		return
+	}
+
+	// Goal deadline approaching
+	if goal.Deadline != nil {
+		daysLeft := int(time.Until(*goal.Deadline).Hours() / 24)
+		if daysLeft >= 0 && daysLeft < 7 {
+			NotifSvc.CreateAndDispatch(
+				userID,
+				"goal_deadline",
+				"Mục tiêu sắp hết hạn",
+				fmt.Sprintf("Mục tiêu %s còn %d ngày hết hạn (còn thiếu %d VND)",
+					goal.Name, daysLeft, goal.TargetAmount-goal.CurrentAmount),
+				nil,
+				true,
+				NotifSvc.GetUserEmail(userID),
+				fmt.Sprintf("Cảnh báo: Mục tiêu %s sắp hết hạn", goal.Name),
+				fmt.Sprintf("Mục tiêu %s của bạn sẽ hết hạn trong %d ngày. Bạn còn thiếu %d VND.",
+					goal.Name, daysLeft, goal.TargetAmount-goal.CurrentAmount),
+			)
+		}
 	}
 }

@@ -1,1 +1,4 @@
 .env
+firebase-service-account.json
+expensetracker-ea8a1-firebase-adminsdk-fbsvc-542d1960a9.json
+*.log

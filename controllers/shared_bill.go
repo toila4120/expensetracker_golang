@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"expensetracker/models"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -147,6 +148,26 @@ func CreateSharedBill(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		tx.Commit()
+
+		// Gửi thông báo cho các thành viên được chia tiền
+		if NotifSvc != nil {
+			for _, split := range input.Splits {
+				var member models.GroupMember
+				if err := db.First(&member, split.GroupMemberID).Error; err == nil {
+					if member.UserID != nil && *member.UserID != userID {
+						NotifSvc.CreateAndDispatch(
+							*member.UserID,
+							"bill_split",
+							"Bạn có hóa đơn mới",
+							fmt.Sprintf("Bạn được chia %d VND từ hóa đơn %s trong nhóm %s",
+								split.Amount, input.Description, group.Name),
+							nil,
+							false, "", "", "",
+						)
+					}
+				}
+			}
+		}
 
 		c.JSON(http.StatusCreated, gin.H{
 			"message": "Tạo hóa đơn thành công",

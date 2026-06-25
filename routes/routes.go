@@ -24,13 +24,14 @@ package routes
 import (
 	"expensetracker/controllers"
 	"expensetracker/middleware"
+	"expensetracker/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 // SetupRoutes cấu hình toàn bộ các đường dẫn cho ứng dụng
-func SetupRoutes(r *gin.Engine, db *gorm.DB) {
+func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationService) {
 	// Health check endpoint cho Render deploy
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -121,5 +122,13 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB) {
 		// Balances & Settlement
 		apiGroup.GET("/groups/:id/balances", controllers.GetBalances(db))
 		apiGroup.POST("/groups/:id/settle", controllers.SettleDebt(db))
+
+		// Notifications
+		apiGroup.POST("/fcm-token", controllers.RegisterFCMToken(db))
+		apiGroup.DELETE("/fcm-token", controllers.DeleteFCMToken(db))
+		apiGroup.GET("/notifications", controllers.GetNotifications(db, notifSvc))
+		apiGroup.GET("/notifications/unread-count", controllers.GetUnreadCount(db, notifSvc))
+		apiGroup.PUT("/notifications/:id/read", controllers.MarkNotificationAsRead(db, notifSvc))
+		apiGroup.PUT("/notifications/read-all", controllers.MarkAllNotificationsAsRead(db, notifSvc))
 	}
 }

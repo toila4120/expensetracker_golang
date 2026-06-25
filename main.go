@@ -1,9 +1,11 @@
 package main
 
 import (
+	"expensetracker/controllers"
 	"expensetracker/models"
 	"expensetracker/routes"
 	"expensetracker/scheduler"
+	"expensetracker/services"
 	"log"
 	"os"
 	"os/signal"
@@ -55,6 +57,8 @@ func main() {
 		&models.SharedBill{},
 		&models.BillSplit{},
 		&models.Settlement{},
+		&models.Notification{},
+		&models.FCMToken{},
 	)
 	if err != nil {
 		log.Println("⚠️ Lỗi khi AutoMigrate:", err)
@@ -72,10 +76,19 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	routes.SetupRoutes(r, DB)
+
+	// Initialize services
+	fcmSvc := services.NewFCMService(database)
+	emailSvc := services.NewEmailService()
+	notifSvc := services.NewNotificationService(database, fcmSvc, emailSvc)
+
+	// Set global notification service for controllers
+	controllers.SetNotificationService(notifSvc)
+
+	routes.SetupRoutes(r, database, notifSvc)
 
 	// Khởi chạy scheduler cho recurring transactions
-	sched := scheduler.New(DB)
+	sched := scheduler.New(database, notifSvc)
 	sched.Start()
 	defer sched.Stop()
 
