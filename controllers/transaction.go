@@ -4,6 +4,7 @@ package controllers
 import (
 	"expensetracker/models"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -299,11 +300,16 @@ func checkBudgetNotification(db *gorm.DB, userID uint, category string, transact
 	month := int(transactionDate.Month())
 	year := transactionDate.Year()
 
+	log.Printf("checkBudgetNotification: userID=%d, category=%s, month=%d, year=%d", userID, category, month, year)
+
 	var budget models.Budget
 	if err := db.Where("user_id = ? AND category = ? AND month = ? AND year = ?",
 		userID, category, month, year).First(&budget).Error; err != nil {
+		log.Printf("checkBudgetNotification: No budget found for category %s", category)
 		return // Không có ngân sách cho danh mục này
 	}
+
+	log.Printf("checkBudgetNotification: Found budget %d VND for category %s", budget.Amount, category)
 
 	// Tính tổng chi tiêu trong tháng cho danh mục này
 	var totalSpent int
@@ -313,8 +319,12 @@ func checkBudgetNotification(db *gorm.DB, userID uint, category string, transact
 		Select("COALESCE(SUM(amount), 0)").
 		Scan(&totalSpent)
 
+	log.Printf("checkBudgetNotification: Total spent=%d, budget=%d, percentage=%d%%", 
+		totalSpent, budget.Amount, totalSpent*100/budget.Amount)
+
 	// Kiểm tra ngưỡng 80%
 	if totalSpent > budget.Amount*80/100 && totalSpent <= budget.Amount {
+		log.Printf("checkBudgetNotification: Sending budget_warning notification")
 		NotifSvc.CreateAndDispatch(
 			userID,
 			"budget_warning",
@@ -328,6 +338,7 @@ func checkBudgetNotification(db *gorm.DB, userID uint, category string, transact
 
 	// Kiểm tra vượt ngân sách
 	if totalSpent > budget.Amount {
+		log.Printf("checkBudgetNotification: Sending budget_exceeded notification")
 		NotifSvc.CreateAndDispatch(
 			userID,
 			"budget_exceeded",
