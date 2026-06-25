@@ -314,7 +314,7 @@ func checkBudgetNotification(db *gorm.DB, userID uint, category string, transact
 	// Tính tổng chi tiêu trong tháng cho danh mục này
 	var totalSpent int
 	db.Model(&models.Transaction{}).
-		Where("user_id = ? AND category = ? AND type = ? AND MONTH(date) = ? AND YEAR(date) = ?",
+		Where("user_id = ? AND category = ? AND type = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?",
 			userID, category, "expense", month, year).
 		Select("COALESCE(SUM(amount), 0)").
 		Scan(&totalSpent)
