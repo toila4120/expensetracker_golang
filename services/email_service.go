@@ -1,44 +1,43 @@
 package services
 
 import (
-	"crypto/tls"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"net/smtp"
+	"net/http"
 	"os"
-	"strconv"
 )
 
 type EmailService struct {
-	host     string
-	port     int
-	username string
-	password string
-	from     string
-	enabled  bool
+	sendgridKey string
+	from        string
+	fromName    string
+	enabled     bool
 }
 
 func NewEmailService() *EmailService {
-	port, _ := strconv.Atoi(os.Getenv("SMTP_PORT"))
-	host := os.Getenv("SMTP_HOST")
-	user := os.Getenv("SMTP_USER")
-	pass := os.Getenv("SMTP_PASS")
+	apiKey := os.Getenv("SENDGRID_API_KEY")
 	from := os.Getenv("SMTP_FROM")
+	fromName := os.Getenv("SMTP_FROM_NAME")
 
-	enabled := host != "" && user != "" && pass != ""
+	if fromName == "" {
+		fromName = "ExpenseTracker"
+	}
+
+	enabled := apiKey != ""
 	if enabled {
-		log.Println("✅ Email Service initialized")
+		log.Println("✅ Email Service initialized (SendGrid)")
 	} else {
-		log.Println("⚠️ Email Service disabled (SMTP not configured)")
+		log.Println("⚠️ Email Service disabled (SENDGRID_API_KEY not set)")
 	}
 
 	return &EmailService{
-		host:     host,
-		port:     port,
-		username: user,
-		password: pass,
-		from:     from,
-		enabled:  enabled,
+		sendgridKey: apiKey,
+		from:        from,
+		fromName:    fromName,
+		enabled:     enabled,
 	}
 }
 
@@ -47,77 +46,56 @@ func (s *EmailService) Send(to, subject, body string) error {
 		return nil
 	}
 
-	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
-		s.from, to, subject, body)
-
-	auth := smtp.PlainAuth("", s.username, s.password, s.host)
-
-	// Port 465 dùng SSL, port 587 dùng STARTTLS
-	if s.port == 465 {
-		return s.sendWithSSL(addr, auth, to, msg)
+	payload := map[string]interface{}{
+		"personalizations": []map[string]interface{}{
+			{
+				"to": []map[string]string{
+					{"email": to},
+				},
+				"subject": subject,
+			},
+		},
+		"from": map[string]string{
+			"email": s.from,
+			"name":  s.fromName,
+		},
+		"content": []map[string]string{
+			{
+				"type":  "text/plain",
+				"value": body,
+			},
+		},
 	}
 
-	err := smtp.SendMail(addr, auth, s.from, []string{to}, []byte(msg))
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Println("Email marshal error:", err)
+		return err
+	}
+
+	req, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Println("Email request error:", err)
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+s.sendgridKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Println("Email send error:", err)
 		return err
 	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Email send error (status %d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("sendgrid error: %d", resp.StatusCode)
+	}
 
 	log.Printf("Email sent to %s: %s", to, subject)
 	return nil
-}
-
-func (s *EmailService) sendWithSSL(addr string, auth smtp.Auth, to, msg string) error {
-	tlsConfig := &tls.Config{
-		ServerName: s.host,
-	}
-
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
-	if err != nil {
-		log.Println("SSL dial error:", err)
-		return err
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, s.host)
-	if err != nil {
-		log.Println("SMTP client error:", err)
-		return err
-	}
-	defer client.Close()
-
-	if err = client.Auth(auth); err != nil {
-		log.Println("SMTP auth error:", err)
-		return err
-	}
-
-	if err = client.Mail(s.from); err != nil {
-		log.Println("SMTP mail error:", err)
-		return err
-	}
-
-	if err = client.Rcpt(to); err != nil {
-		log.Println("SMTP rcpt error:", err)
-		return err
-	}
-
-	w, err := client.Data()
-	if err != nil {
-		log.Println("SMTP data error:", err)
-		return err
-	}
-
-	if _, err = w.Write([]byte(msg)); err != nil {
-		log.Println("SMTP write error:", err)
-		return err
-	}
-
-	if err = w.Close(); err != nil {
-		log.Println("SMTP close error:", err)
-		return err
-	}
-
-	log.Printf("Email sent to %s (SSL)", to)
-	return client.Quit()
 }
