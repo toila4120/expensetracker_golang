@@ -67,7 +67,8 @@ func (s *NotificationService) CreateAndDispatch(
 	}
 
 	if sendEmail && s.emailSvc != nil && emailTo != "" {
-		if err := s.emailSvc.Send(emailTo, emailSubject, emailBody); err != nil {
+		subject, htmlBody := s.emailSvc.GetEmailTemplate(notifType, emailSubject, emailBody)
+		if err := s.emailSvc.SendHTML(emailTo, subject, htmlBody); err != nil {
 			log.Println("Email dispatch error:", err)
 		}
 	}
