@@ -19,6 +19,8 @@ type CreateBillInput struct {
 	SplitMethod     string            `json:"split_method" binding:"required,oneof=equal percentage custom"`
 	TransactionDate time.Time         `json:"transaction_date"`
 	Splits          []BillSplitInput  `json:"splits" binding:"required,min=1"`
+	RemindAuto      *bool             `json:"remind_auto"` // nil = default true
+	RemindHour      *int              `json:"remind_hour"` // nil = default 8
 }
 
 type QuickBillInput struct {
@@ -29,6 +31,8 @@ type QuickBillInput struct {
 	SplitMethod     string            `json:"split_method" binding:"required,oneof=equal percentage custom"`
 	TransactionDate time.Time         `json:"transaction_date"`
 	Members         []QuickMemberInput `json:"members" binding:"required,min=1"`
+	RemindAuto      *bool             `json:"remind_auto"`
+	RemindHour      *int              `json:"remind_hour"`
 }
 
 type QuickMemberInput struct {
@@ -126,6 +130,19 @@ func CreateSharedBill(db *gorm.DB) gin.HandlerFunc {
 			Description:     input.Description,
 			SplitMethod:     input.SplitMethod,
 			TransactionDate: txDate,
+			RemindAuto:      true,
+			RemindHour:      8,
+		}
+		if input.RemindAuto != nil {
+			sharedBill.RemindAuto = *input.RemindAuto
+		}
+		if input.RemindHour != nil {
+			if *input.RemindHour < 0 || *input.RemindHour > 23 {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": "remind_hour phải từ 0 đến 23"})
+				return
+			}
+			sharedBill.RemindHour = *input.RemindHour
 		}
 		if err := tx.Create(&sharedBill).Error; err != nil {
 			tx.Rollback()
@@ -482,6 +499,19 @@ func CreateQuickBill(db *gorm.DB) gin.HandlerFunc {
 			Description:     input.Description,
 			SplitMethod:     input.SplitMethod,
 			TransactionDate: txDate,
+			RemindAuto:      true,
+			RemindHour:      8,
+		}
+		if input.RemindAuto != nil {
+			sharedBill.RemindAuto = *input.RemindAuto
+		}
+		if input.RemindHour != nil {
+			if *input.RemindHour < 0 || *input.RemindHour > 23 {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": "remind_hour phải từ 0 đến 23"})
+				return
+			}
+			sharedBill.RemindHour = *input.RemindHour
 		}
 		if err := tx.Create(&sharedBill).Error; err != nil {
 			tx.Rollback()

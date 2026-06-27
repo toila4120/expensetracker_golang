@@ -16,6 +16,8 @@ type SharedBill struct {
 	Description     string         `json:"description"`
 	SplitMethod     string         `gorm:"not null" json:"split_method"`
 	TransactionDate time.Time      `gorm:"not null" json:"transaction_date"`
+	RemindAuto      bool           `gorm:"default:true" json:"remind_auto"`
+	RemindHour      int            `gorm:"default:8" json:"remind_hour"` // 0-23
 	CreatedAt       time.Time      `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time      `gorm:"autoUpdateTime" json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`

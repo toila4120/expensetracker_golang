@@ -57,6 +57,7 @@ func main() {
 		&models.SharedBill{},
 		&models.BillSplit{},
 		&models.Settlement{},
+		&models.DebtReminder{},
 		&models.Notification{},
 		&models.FCMToken{},
 	)

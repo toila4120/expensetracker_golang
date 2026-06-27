@@ -27,12 +27,12 @@ func New(db *gorm.DB, notifSvc *services.NotificationService) *Scheduler {
 }
 
 func (s *Scheduler) Start() {
-	// Bắt补齐 các ngày đã bỏ lỡ khi server vừa start
 	s.catchUp()
 
 	s.cron.AddFunc("5 0 * * *", s.processRecurringTransactions)
+	s.cron.AddFunc("0 * * * *", s.sendDebtReminders)
 	s.cron.Start()
-	log.Println("⏰ Scheduler started - Recurring transactions will be processed daily at 00:05")
+	log.Println("⏰ Scheduler started - Recurring at 00:05, Debt reminders every hour")
 }
 
 func (s *Scheduler) Stop() {
@@ -187,4 +187,144 @@ func (s *Scheduler) processRecurringTransactionsForDate(targetDate time.Time) {
 		log.Printf("⏰ Scheduler: Hoàn thành ngày %d/%d/%d - Đã tạo %d/%d giao dịch mới\n",
 			day, month, year, createdCount, len(recurrings))
 	}
+}
+
+type debtSummary struct {
+	GroupMemberID uint   `json:"group_member_id"`
+	UserID        *uint  `json:"user_id"`
+	TotalOwed     int    `json:"total_owed"`
+	GroupName     string `json:"group_name"`
+	GroupID       uint   `json:"group_id"`
+}
+
+type debtBill struct {
+	SharedBillID uint   `json:"shared_bill_id"`
+	Amount       int    `json:"amount"`
+	Description  string `json:"description"`
+}
+
+func (s *Scheduler) sendDebtReminders() {
+	log.Println("⏰ Scheduler: Bắt đầu gửi nhắc nhở nợ...")
+	today := time.Now().Truncate(24 * time.Hour)
+	currentHour := time.Now().Hour()
+
+	type debtSummary struct {
+		GroupMemberID uint   `json:"group_member_id"`
+		UserID        *uint  `json:"user_id"`
+		TotalOwed     int    `json:"total_owed"`
+		GroupName     string `json:"group_name"`
+		GroupID       uint   `json:"group_id"`
+	}
+
+	type debtBill struct {
+		SharedBillID uint   `json:"shared_bill_id"`
+		Amount       int    `json:"amount"`
+		Description  string `json:"description"`
+	}
+
+	// Quét theo bill: remind_auto=true và remind_hour khớp giờ hiện tại
+	var summaries []debtSummary
+	err := s.db.Raw(`
+		SELECT bs.group_member_id, gm.user_id, SUM(bs.amount) AS total_owed,
+		       g.name AS group_name, g.id AS group_id
+		FROM bill_splits bs
+		JOIN shared_bills sb ON sb.id = bs.shared_bill_id
+		JOIN groups g ON g.id = sb.group_id
+		JOIN group_members gm ON gm.id = bs.group_member_id
+		WHERE bs.is_settled = false
+		  AND sb.payer_id != bs.group_member_id
+		  AND sb.remind_auto = true
+		  AND sb.remind_hour = ?
+		  AND bs.deleted_at IS NULL
+		  AND sb.deleted_at IS NULL
+		  AND g.deleted_at IS NULL
+		GROUP BY bs.group_member_id, gm.user_id, g.name, g.id
+	`, currentHour).Scan(&summaries).Error
+
+	if err != nil {
+		log.Println("❌ Scheduler: Lỗi khi lấy danh sách nợ:", err)
+		return
+	}
+
+	if len(summaries) == 0 {
+		log.Printf("⏰ Scheduler: Không có khoản nợ nào cần nhắc lúc %dh\n", currentHour)
+		return
+	}
+
+	sentCount := 0
+	for _, debt := range summaries {
+		if debt.UserID == nil {
+			continue
+		}
+
+		var todayReminders int64
+		s.db.Model(&models.DebtReminder{}).
+			Where("group_id = ? AND to_member_id = ? AND reminder_type = ? AND sent_at >= ?",
+				debt.GroupID, debt.GroupMemberID, "auto", today).
+			Count(&todayReminders)
+		if todayReminders > 0 {
+			continue
+		}
+
+		var bills []debtBill
+		s.db.Raw(`
+			SELECT sb.id AS shared_bill_id, bs.amount, sb.description
+			FROM bill_splits bs
+			JOIN shared_bills sb ON sb.id = bs.shared_bill_id
+			WHERE sb.group_id = ?
+			  AND bs.group_member_id = ?
+			  AND bs.is_settled = false
+			  AND sb.payer_id != bs.group_member_id
+			  AND sb.remind_auto = true
+			  AND sb.remind_hour = ?
+			  AND bs.deleted_at IS NULL
+			  AND sb.deleted_at IS NULL
+		`, debt.GroupID, debt.GroupMemberID, currentHour).Scan(&bills)
+
+		billDescs := ""
+		for i, b := range bills {
+			if i < 3 {
+				if i > 0 {
+					billDescs += ", "
+				}
+				billDescs += b.Description
+			}
+		}
+		if len(bills) > 3 {
+			billDescs += fmt.Sprintf(" và %d hóa đơn khác", len(bills)-3)
+		}
+
+		for _, b := range bills {
+			reminder := models.DebtReminder{
+				GroupID:      debt.GroupID,
+				SharedBillID: b.SharedBillID,
+				ToMemberID:   debt.GroupMemberID,
+				ReminderType: "auto",
+			}
+			s.db.Create(&reminder)
+		}
+
+		if s.notifSvc != nil {
+			var user models.User
+			s.db.First(&user, *debt.UserID)
+			if user.Email != "" {
+				s.notifSvc.CreateAndDispatch(
+					*debt.UserID,
+					"debt_reminder",
+					"Nhắc nhở thanh toán",
+					fmt.Sprintf("Bạn nợ %d VND trong nhóm \"%s\" từ các hóa đơn: %s",
+						debt.TotalOwed, debt.GroupName, billDescs),
+					nil,
+					true,
+					user.Email,
+					fmt.Sprintf("Nhắc nhở: Bạn có khoản nợ trong nhóm %s", debt.GroupName),
+					fmt.Sprintf("Bạn đang nợ %d VND trong nhóm \"%s\" từ các hóa đơn: %s. Hãy thanh toán sớm nhé!",
+						debt.TotalOwed, debt.GroupName, billDescs),
+				)
+			}
+		}
+		sentCount++
+	}
+
+	log.Printf("⏰ Scheduler: Hoàn thành nhắc nợ - Đã gửi %d nhắc nhở\n", sentCount)
 }

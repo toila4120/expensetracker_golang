@@ -148,6 +148,24 @@ func (s *EmailService) GetEmailTemplate(notifType, title, message string) (subje
 			ButtonText: "Xem mục tiêu",
 			ButtonURL:  "https://expensetracker.app/goals",
 		})
+	case "group_invite":
+		subject = fmt.Sprintf("💰 %s", title)
+		htmlBody = s.buildTemplateHTML(EmailData{
+			Heading:    "Mời vào nhóm",
+			Message:    message,
+			Highlight:  "Bạn đã được thêm vào một nhóm chia tiền mới.",
+			ButtonText: "Xem nhóm",
+			ButtonURL:  "https://expensetracker.app/groups",
+		})
+	case "debt_reminder":
+		subject = fmt.Sprintf("💰 %s", title)
+		htmlBody = s.buildTemplateHTML(EmailData{
+			Heading:    "Nhắc nhở thanh toán",
+			Message:    message,
+			Highlight:  "Bạn có khoản nợ chưa thanh toán trong nhóm chia tiền.",
+			ButtonText: "Thanh toán ngay",
+			ButtonURL:  "https://expensetracker.app/groups",
+		})
 	default:
 		subject = title
 		htmlBody = s.buildHTML(message, "")

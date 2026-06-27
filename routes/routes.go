@@ -110,8 +110,10 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationServ
 		apiGroup.POST("/groups", controllers.CreateGroup(db))
 		apiGroup.GET("/groups", controllers.GetGroups(db))
 		apiGroup.GET("/groups/:id", controllers.GetGroupDetails(db))
+		apiGroup.PUT("/groups/:id", controllers.UpdateGroup(db))
 		apiGroup.POST("/groups/:id/members", controllers.AddMember(db))
 		apiGroup.DELETE("/groups/:id/members/:member_id", controllers.RemoveMember(db))
+		apiGroup.POST("/groups/:id/remind/:member_id", controllers.RemindDebt(db))
 
 		// Shared Bills
 		apiGroup.POST("/groups/:id/bills", controllers.CreateSharedBill(db))
