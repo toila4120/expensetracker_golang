@@ -31,7 +31,7 @@ import (
 )
 
 // SetupRoutes cấu hình toàn bộ các đường dẫn cho ứng dụng
-func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationService) {
+func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationService, googleOAuth *services.GoogleOAuthService) {
 	// Health check endpoint cho Render deploy
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -51,6 +51,7 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationServ
 		authGroup.POST("/register", controllers.Register(db))
 		authGroup.POST("/login", controllers.Login(db))
 		authGroup.POST("/refresh", controllers.RefreshToken(db))
+		authGroup.POST("/google", controllers.GoogleLogin(db, googleOAuth))
 	}
 
 	apiGroup := r.Group("/api")

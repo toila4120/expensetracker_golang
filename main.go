@@ -82,11 +82,12 @@ func main() {
 	fcmSvc := services.NewFCMService(database)
 	emailSvc := services.NewEmailService()
 	notifSvc := services.NewNotificationService(database, fcmSvc, emailSvc)
+	googleOAuth := services.NewGoogleOAuthService()
 
 	// Set global notification service for controllers
 	controllers.SetNotificationService(notifSvc)
 
-	routes.SetupRoutes(r, database, notifSvc)
+	routes.SetupRoutes(r, database, notifSvc, googleOAuth)
 
 	// Khởi chạy scheduler cho recurring transactions
 	sched := scheduler.New(database, notifSvc)
