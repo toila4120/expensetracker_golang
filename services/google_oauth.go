@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -31,9 +33,8 @@ func NewGoogleOAuthService() *GoogleOAuthService {
 
 // VerifyToken verifies a Google ID token and returns user info
 func (s *GoogleOAuthService) VerifyToken(idToken string) (*GoogleUserInfo, error) {
-	// Exchange ID token for user info using Google's tokeninfo endpoint
-	// Or use the OAuth2 userinfo endpoint
-	url := fmt.Sprintf("https://oauth2.googleapis.com/tokeninfo?id_token=%s", idToken)
+	// URL encode the id_token to handle special characters
+	url := fmt.Sprintf("https://oauth2.googleapis.com/tokeninfo?id_token=%s", url.QueryEscape(idToken))
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -42,13 +43,15 @@ func (s *GoogleOAuthService) VerifyToken(idToken string) (*GoogleUserInfo, error
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[Google OAuth] Tokeninfo status: %d, body: %s", resp.StatusCode, string(body))
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("invalid Google token: %s", string(body))
+		return nil, fmt.Errorf("invalid Google token (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var userInfo GoogleUserInfo
-	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+	if err := json.Unmarshal(body, &userInfo); err != nil {
 		return nil, fmt.Errorf("failed to decode Google user info: %w", err)
 	}
 
@@ -59,7 +62,7 @@ func (s *GoogleOAuthService) VerifyToken(idToken string) (*GoogleUserInfo, error
 
 	// Validate audience (aud) matches our client ID
 	if s.ClientID != "" && userInfo.Aud != s.ClientID {
-		return nil, fmt.Errorf("invalid Google token: audience mismatch")
+		return nil, fmt.Errorf("invalid Google token: audience mismatch (got %s, want %s)", userInfo.Aud, s.ClientID)
 	}
 
 	return &userInfo, nil
