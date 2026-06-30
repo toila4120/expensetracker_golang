@@ -118,10 +118,38 @@ func GetGroupDetails(db *gorm.DB) gin.HandlerFunc {
 		var members []models.GroupMember
 		db.Where("group_id = ?", group.ID).Preload("User").Find(&members)
 
+		// Build response with username for registered users
+		type MemberResponse struct {
+			ID        uint   `json:"id"`
+			GroupID   uint   `json:"group_id"`
+			UserID    *uint  `json:"user_id"`
+			Username  string `json:"username"`
+			GuestName string `json:"guest_name"`
+			Role      string `json:"role"`
+			CreatedAt string `json:"created_at"`
+		}
+
+		var memberList []MemberResponse
+		for _, m := range members {
+			username := m.GuestName
+			if m.User != nil {
+				username = m.User.Username
+			}
+			memberList = append(memberList, MemberResponse{
+				ID:        m.ID,
+				GroupID:   m.GroupID,
+				UserID:    m.UserID,
+				Username:  username,
+				GuestName: m.GuestName,
+				Role:      m.Role,
+				CreatedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			})
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"group":   group,
-				"members": members,
+				"members": memberList,
 			},
 		})
 	}

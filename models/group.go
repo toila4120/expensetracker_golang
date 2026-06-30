@@ -21,6 +21,7 @@ type GroupMember struct {
 	ID        uint           `gorm:"primaryKey;autoIncrement" json:"id"`
 	GroupID   uint           `gorm:"not null;index" json:"group_id"`
 	UserID    *uint          `gorm:"index" json:"user_id"`
+	User      *User          `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	GuestName string         `json:"guest_name"`
 	Role      string         `gorm:"default:'member'" json:"role"`
 	CreatedAt time.Time      `gorm:"autoCreateTime" json:"created_at"`
