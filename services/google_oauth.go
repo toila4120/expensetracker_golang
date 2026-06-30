@@ -61,6 +61,7 @@ func (s *GoogleOAuthService) VerifyToken(idToken string) (*GoogleUserInfo, error
 	}
 
 	// Validate audience (aud) matches our client ID
+	log.Printf("[Google OAuth] Aud check - token_aud: %q, server_client_id: %q, match: %v", userInfo.Aud, s.ClientID, userInfo.Aud == s.ClientID)
 	if s.ClientID != "" && userInfo.Aud != s.ClientID {
 		return nil, fmt.Errorf("invalid Google token: audience mismatch (got %s, want %s)", userInfo.Aud, s.ClientID)
 	}
