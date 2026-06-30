@@ -100,6 +100,7 @@ func main() {
 
 	go func() {
 		log.Println("🚀 Server đang khởi chạy tại cổng:", port)
+	log.Println("📦 Version: v1.0.3-google-oauth-fix")
 		if err := r.Run(":" + port); err != nil {
 			log.Fatal("❌ Lỗi khi khởi chạy Server: ", err)
 		}

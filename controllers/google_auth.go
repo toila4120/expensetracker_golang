@@ -4,6 +4,7 @@ import (
 	"expensetracker/models"
 	"expensetracker/services"
 	"expensetracker/utils"
+	"log"
 	"net/http"
 	"strings"
 
@@ -18,6 +19,7 @@ type GoogleLoginInput struct {
 
 func GoogleLogin(db *gorm.DB, googleOAuth *services.GoogleOAuthService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		log.Println("[Google Login] Step 1: Parsing input")
 		var input GoogleLoginInput
 		if err := c.ShouldBindJSON(&input); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -27,6 +29,7 @@ func GoogleLogin(db *gorm.DB, googleOAuth *services.GoogleOAuthService) gin.Hand
 			return
 		}
 
+		log.Println("[Google Login] Step 2: Verifying Google token")
 		// Verify Google token
 		var googleUser *services.GoogleUserInfo
 		var err error
@@ -45,11 +48,14 @@ func GoogleLogin(db *gorm.DB, googleOAuth *services.GoogleOAuthService) gin.Hand
 		}
 
 		if err != nil {
+			log.Printf("[Google Login] Step 2 FAILED: %v", err)
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "Token Google không hợp lệ",
 			})
 			return
 		}
+
+		log.Printf("[Google Login] Step 3: Token valid. Email=%s, Verified=%v", googleUser.Email, googleUser.VerifiedEmail)
 
 		// Check email verified
 		if !googleUser.VerifiedEmail {
@@ -63,11 +69,12 @@ func GoogleLogin(db *gorm.DB, googleOAuth *services.GoogleOAuthService) gin.Hand
 		username := strings.Split(googleUser.Email, "@")[0]
 
 		// Find existing user by email
+		log.Printf("[Google Login] Step 4: Finding user by email=%s", googleUser.Email)
 		var existingUser models.User
 		err = db.Where("email = ?", googleUser.Email).First(&existingUser).Error
 
 		if err == gorm.ErrRecordNotFound {
-			// User doesn't exist - create new account
+			log.Printf("[Google Login] Step 5: User not found, creating new account")
 			newUser := models.User{
 				Username:   username,
 				Email:      googleUser.Email,
@@ -110,12 +117,14 @@ func GoogleLogin(db *gorm.DB, googleOAuth *services.GoogleOAuthService) gin.Hand
 		}
 
 		if err != nil {
+			log.Printf("[Google Login] Step 4 FAILED: DB error: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Lỗi hệ thống",
 			})
 			return
 		}
 
+		log.Printf("[Google Login] Step 5: User found. provider=%s, provider_id=%s", existingUser.Provider, existingUser.ProviderID)
 		// User exists - check if already linked to Google
 		if existingUser.Provider == "google" && existingUser.ProviderID == googleUser.ID {
 			// Already linked - just login
