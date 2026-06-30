@@ -11,6 +11,7 @@ import (
 
 type GoogleUserInfo struct {
 	ID            string `json:"id"`
+	Aud           string `json:"aud"`
 	Email         string `json:"email"`
 	VerifiedEmail bool   `json:"verified_email"`
 	Name          string `json:"name"`
@@ -54,6 +55,11 @@ func (s *GoogleOAuthService) VerifyToken(idToken string) (*GoogleUserInfo, error
 	// Verify the token is issued to our client
 	if userInfo.ID == "" {
 		return nil, fmt.Errorf("invalid Google token: missing user ID")
+	}
+
+	// Validate audience (aud) matches our client ID
+	if s.ClientID != "" && userInfo.Aud != s.ClientID {
+		return nil, fmt.Errorf("invalid Google token: audience mismatch")
 	}
 
 	return &userInfo, nil

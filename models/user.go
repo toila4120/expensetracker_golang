@@ -17,7 +17,7 @@ type User struct {
 	ID         uint       `gorm:"primaryKey;autoIncrement" json:"id"`
 	Username   string     `gorm:"not null" json:"username"`
 	Email      string     `gorm:"unique;not null" json:"email"`
-	Password   string     `gorm:"not null" json:"-"`
+	Password   string     `json:"-"`
 	Provider   string     `gorm:"default:local" json:"provider"`          // "local" hoặc "google"
 	ProviderID string     `gorm:"index" json:"provider_id,omitempty"`     // Google ID (nếu login bằng Google)
 	CreatedAt  time.Time  `gorm:"autoCreateTime" json:"created_at"`
