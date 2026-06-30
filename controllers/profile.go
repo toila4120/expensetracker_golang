@@ -20,10 +20,12 @@ func GetProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		ctx.JSON(http.StatusOK, gin.H{
-			"id":       user.ID,
-			"username": user.Username,
-			"email":    user.Email,
-			"created_at": user.CreatedAt,
+			"id":          user.ID,
+			"username":    user.Username,
+			"email":       user.Email,
+			"provider":    user.Provider,
+			"has_password": user.Password != "",
+			"created_at":  user.CreatedAt,
 		})
 	}
 }

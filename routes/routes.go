@@ -85,6 +85,7 @@ func SetupRoutes(r *gin.Engine, db *gorm.DB, notifSvc *services.NotificationServ
 
 		// Security
 		apiGroup.PUT("/change-password", controllers.ChangePassword(db))
+		apiGroup.POST("/set-password", controllers.SetPassword(db))
 
 		// Recurring Transactions
 		apiGroup.GET("/recurring", controllers.GetRecurrings(db))
