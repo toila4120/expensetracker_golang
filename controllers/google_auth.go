@@ -55,15 +55,7 @@ func GoogleLogin(db *gorm.DB, googleOAuth *services.GoogleOAuthService) gin.Hand
 			return
 		}
 
-		log.Printf("[Google Login] Step 3: Token valid. Email=%s, Verified=%v", googleUser.Email, googleUser.VerifiedEmail)
-
-		// Check email verified
-		if !googleUser.VerifiedEmail {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": "Email Google chưa được xác thực",
-			})
-			return
-		}
+		log.Printf("[Google Login] Step 3: Token valid. Email=%s", googleUser.Email)
 
 		// Extract username from email
 		username := strings.Split(googleUser.Email, "@")[0]

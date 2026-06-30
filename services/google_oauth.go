@@ -15,7 +15,6 @@ type GoogleUserInfo struct {
 	ID            string `json:"sub"`
 	Aud           string `json:"aud"`
 	Email         string `json:"email"`
-	VerifiedEmail bool   `json:"verified_email"`
 	Name          string `json:"name"`
 }
 
